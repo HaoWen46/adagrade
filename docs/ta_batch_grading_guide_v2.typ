@@ -356,9 +356,9 @@ Analysis 中與其他方法並排比較。]
   inset: 6.5pt,
   table.header([*階段*], [*檢查事項*]),
   [#chg[開始前]],
-  [#chg[roster 匯入（`student_id,name,email`）；三個辨識欄位區域已畫定（上傳前
-   畫好，之後修改會使已審核頁面失效）；Providers／Methods／每題 rubric 與參考
-   解答就緒。]],
+  [#chg[roster 匯入（`student_id,name,email`）；三個辨識欄位區域已畫定（務必
+   上傳前畫好——之後修改不會重跑已辨識的頁面，finalize 後舊遮罩框也會殘留）；
+   Providers／Methods／每題 rubric 與參考解答就緒。]],
   [#chg[上傳與識別]],
   [#chg[整疊上傳；在人工識別佇列逐頁確認（鍵盤 j / k / Enter，只能從名冊搜尋
    選人、不能自由輸入）；檢查「學生 × 題目」矩陣的缺格；finalize 可增量執行，
@@ -399,9 +399,9 @@ course_grading/
 ```
 ]
 
-#chg[需要交付或存檔時，由系統匯出：每位學生的結果 PDF（發布信附件，三種品質
-可選；附件過大時自動退回逐題 JPEG 的 zip）、全班成績匯出（含退選標記）、以及
-單一學生的補寄（individual resend）。]
+#chg[需要交付或存檔時，由系統匯出：每位學生的結果 PDF（發布信附件，選項三種：
+不附檔、壓縮或原始品質；另可勾選改寄逐題 JPEG 的 zip，作為信箱附件大小限制的
+後備）、全班成績匯出（含退選標記）、以及單一學生的補寄（individual resend）。]
 
 // ============================ 11 ============================
 = 建議時程
@@ -445,8 +445,8 @@ course_grading/
 #heading(level: 1, numbering: none)[#chg[附錄：v1 → v2 變更總覽]]
 
 #chg[_v2.1（2026-07-20）：系統更名 AdaGrade（原 ADA-Marker）；v1 文件移至
-`docs/ta_batch_grading_guide_v1.pdf`；修正結果 PDF 附件選項的描述。
-紅字仍表示相對 v1.0 的變更。_]
+`docs/ta_batch_grading_guide_v1.pdf`；修正結果 PDF 附件選項與「修改辨識欄位
+區域的影響」之描述。紅字仍表示相對 v1.0 的變更。_]
 
 #chg[#table(
   columns: (6.5em, 1fr, 1.15fr),
