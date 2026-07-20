@@ -1,9 +1,9 @@
-// ta_batch_grading_guide_v2.typ — 助教批改流程 v2.0（ADA-Marker 版）
+// ta_batch_grading_guide_v2.typ — 助教批改流程 v2.1（AdaGrade 版，前身 ADA-Marker）
 // 紅字 = 相對 v1.0（ChatGPT 網頁流程）新增或改寫；黑字 = 沿用 v1.0。
 // 編譯：typst compile docs/ta_batch_grading_guide_v2.typ docs/ta_batch_grading_guide_v2.pdf
 
 #set document(
-  title: "180 份考卷批次批改與 PDF 產出流程說明（v2.0，ADA-Marker 版）",
+  title: "180 份考卷批次批改與 PDF 產出流程說明（v2.1，AdaGrade 版）",
   author: "ADA 課程助教",
 )
 
@@ -34,10 +34,10 @@
 #align(center)[
   #text(size: 20pt, weight: "bold")[180 份考卷批次批改與 PDF 產出流程說明]
   #v(0.5em)
-  #text(size: 12pt)[給助教參考的標準作業流程#chg[（ADA-Marker 版）]]
+  #text(size: 12pt)[給助教參考的標準作業流程#chg[（AdaGrade 版）]]
 ]
 #v(1.6em)
-本文件說明如何將全班學生的#chg[掃描考卷匯入課程自架的 ADA-Marker 系統]，依同一份
+本文件說明如何將全班學生的#chg[掃描考卷匯入課程自架的 AdaGrade 系統]，依同一份
 rubric 進行#chg[AI 輔助]批改#chg[、人工複核與發布]，並為每位學生產出完整的批改
 PDF 與成績彙整#chg[（由系統寄送至學生信箱）]。
 
@@ -45,15 +45,16 @@ PDF 與成績彙整#chg[（由系統寄送至學生信箱）]。
 #grid(
   columns: (5.5em, 1fr),
   row-gutter: 0.55em,
-  [*版本：*], [#chg[v2.0（取代 v1.0 的 ChatGPT 網頁流程）]],
+  [*版本：*], [#chg[v2.1（取代 v1.0 的 ChatGPT 網頁流程）]],
   [*日期：*], [#chg[2026-07-20]],
   [*適用情境：*], [單題或多題手寫答案批改、逐字轉錄、#chg[AI 輔助評分、強制人工抽查、發布與 regrade]],
+  [*系統名稱：*], [#chg[AdaGrade（前身 ADA-Marker；伺服器指令與環境變數仍沿用 `adamarker`／`ADAMARKER_*` 舊名）]],
 )
 
 #v(1.4em)
 #callout([#chg[閱讀說明]], tone: R, fillc: rgb("#fdf3f3"))[
   #chg[紅字為相對 v1.0（ChatGPT 網頁流程）*新增或改寫*的內容；黑字為沿用 v1.0
-  的原則與規範。v1.0 原始文件保留於專案根目錄 `ta_batch_grading_guide.pdf`
+  的原則與規範。v1.0 原始文件保留於 `docs/ta_batch_grading_guide_v1.pdf`
   供對照。]
 ]
 
@@ -61,7 +62,7 @@ PDF 與成績彙整#chg[（由系統寄送至學生信箱）]。
 #set page(
   header: [
     #set text(size: 9pt)
-    180 份考卷批次批改流程#h(1fr)助教參考文件#chg[（v2.0）]
+    180 份考卷批次批改流程#h(1fr)助教參考文件#chg[（v2.1）]
     #v(-4pt)
     #line(length: 100%, stroke: 0.4pt)
   ],
@@ -92,7 +93,7 @@ PDF 與成績彙整#chg[（由系統寄送至學生信箱）]。
   禁止補寫，字跡無法辨認時必須將該筆 confidence 標為 `illegible`，而非自行猜測。]
 ]
 
-#chg[與 v1 最大的差異：批改不再經過 ChatGPT 網頁。ADA-Marker 是課程自架的服務，
+#chg[與 v1 最大的差異：批改不再經過 ChatGPT 網頁。AdaGrade 是課程自架的服務，
 考卷影像先遮罩學生身分才會送往視覺模型，全流程在自己的主機與課程控制的 API
 金鑰之間完成，學生資料不會進入任何第三方的對話介面或檔案庫。]
 
@@ -427,7 +428,7 @@ course_grading/
 // ============================ 12 ============================
 = 資料來源
 
-#chg[本文件依 ADA-Marker 專案文件與系統內建說明整理：]
+#chg[本文件依 AdaGrade 專案文件與系統內建說明整理（部分沿用舊名 ADA-Marker）：]
 
 + #chg[系統內建使用指南（登入後左側 Guide 頁）——各分頁與控制項的完整說明；]
 + #chg[`docs/OPERATIONS.md`——備份、還原與維運程序；]
@@ -443,11 +444,15 @@ course_grading/
 #pagebreak(weak: true)
 #heading(level: 1, numbering: none)[#chg[附錄：v1 → v2 變更總覽]]
 
+#chg[_v2.1（2026-07-20）：系統更名 AdaGrade（原 ADA-Marker）；v1 文件移至
+`docs/ta_batch_grading_guide_v1.pdf`；修正結果 PDF 附件選項的描述。
+紅字仍表示相對 v1.0 的變更。_]
+
 #chg[#table(
   columns: (6.5em, 1fr, 1.15fr),
   stroke: 0.4pt + rgb("#d9a0a0"),
   inset: 6.5pt,
-  table.header([*面向*], [*v1（ChatGPT 網頁）*], [*v2（ADA-Marker）*]),
+  table.header([*面向*], [*v1（ChatGPT 網頁）*], [*v2（AdaGrade）*]),
   [批改引擎], [ChatGPT 網頁對話，逐批上傳], [自架系統直連批改 API，資料不進第三方介面],
   [匿名化], [人工裁切＋匿名編號對照表], [系統遮罩＋身分/內容分離，遮罩審核閘門強制],
   [分批], [每批約 10 份、共 18 批], [全班一次 run；由四道閘門與成本煞車控管],
