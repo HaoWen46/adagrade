@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 
 /** Providers page intro card. */
 export const providersIntro =
-  "ADA-Marker grades by sending each (masked) answer image to an AI model over the internet. " +
+  "AdaGrade grades by sending each (masked) answer image to an AI model over the internet. " +
   "A provider is the company/endpoint that hosts the model. Add one here with the API key from " +
   "their console — the key is stored encrypted on this server and never shown again.";
 
@@ -47,7 +47,7 @@ export const providerHelp: Record<
   ),
   rateLimit: (
     <p>
-      How many requests per second ADA-Marker may send. Keep the default unless the provider
+      How many requests per second AdaGrade may send. Keep the default unless the provider
       documents other limits — going too fast causes errors, not faster grading.
     </p>
   ),
@@ -100,7 +100,7 @@ export const maxTokensHelp: ReactNode = (
       models read and write (roughly 3–4 characters each) — providers bill per token.
     </p>
     <p>
-      Leave this blank and ADA-Marker applies its built-in cap of 4096 tokens, which is enough
+      Leave this blank and AdaGrade applies its built-in cap of 4096 tokens, which is enough
       for normal grading output. Setting it too low does not save money in a useful way: the
       model&apos;s grading output gets cut off mid-answer, which shows up as malformed-output
       re-asks and failed items — costing more, not less.
@@ -308,7 +308,7 @@ export const reasoningLevelHelp: ReactNode = (
 export const apiKindHelp: ReactNode = (
   <>
     <p>
-      Providers speak one of two common request formats (&quot;wire protocols&quot;). ADA-Marker
+      Providers speak one of two common request formats (&quot;wire protocols&quot;). AdaGrade
       supports both — pick whichever the provider&apos;s docs say:
     </p>
     <ul className="list-disc space-y-1 pl-4">
@@ -562,7 +562,7 @@ export const scanFinalizeHelp: ReactNode = (
     </p>
     <p>
       Student names shown while resolving pages come from the roster seeded during import — the
-      same identity masking used elsewhere in ADA-Marker applies once a page becomes a graded
+      same identity masking used elsewhere in AdaGrade applies once a page becomes a graded
       submission.
     </p>
   </>
@@ -936,6 +936,10 @@ export const runScopeHelp: ReactNode = (
     <li>
       <strong>answer</strong> — a single answer; handy for testing a method cheaply before a full
       run
+    </li>
+    <li>
+      <strong>calibration sample</strong> — a deterministic sample of N answers spread across
+      problems, for the calibration batch (the guide suggests 5–10) — one run instead of N
     </li>
   </ul>
 );

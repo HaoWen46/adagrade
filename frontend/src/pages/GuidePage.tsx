@@ -48,10 +48,10 @@ export function GuidePage() {
   return (
     <div className="max-w-4xl space-y-4">
       <Anchor id="overview">
-        <Card title="What ADA-Marker is">
+        <Card title="What AdaGrade is">
           <div className="space-y-4 text-sm text-neutral-700">
             <p>
-              ADA-Marker grades handwritten exams and assignments with AI assistance while
+              AdaGrade grades handwritten exams and assignments with AI assistance while
               keeping humans in charge: rubrics are explicit, every AI score is reviewable and
               overridable, student identity is masked before any image reaches a vision model,
               and nothing goes out to students until a publish gate passes. The typical journey
@@ -212,13 +212,17 @@ export function GuidePage() {
               the old ones — they fall back to pending and must be re-reviewed.
             </Step>
             <Step>
-              <span className="font-semibold">AI runs &amp; Review.</span> Start a run (method ×
-              problems × students) from the assessment&apos;s Overview tab (Start AI grading) or
-              the <span className="font-semibold">Runs</span> page; watch it in Runs. Then work
-              the Review tab per problem: spot-check the AI&apos;s grades, add manual grades
-              (fallbacks where the final source leaves an answer undecided), or flag — grades
-              become official only once a final grading source is chosen on Publish. Costs are
-              tracked per record; budget caps stop runaway spend.
+              <span className="font-semibold">AI runs &amp; Review.</span> Calibrate first:
+              Overview&apos;s <em>Start calibration run</em> grades a stratified sample of N
+              answers in one run (scope &ldquo;calibration sample&rdquo;) — hand-grade a few of
+              the same answers and compare on Analysis before grading the whole class. Then start
+              the class-wide run (method × problems × students) from the Overview tab (Start AI
+              grading) or the <span className="font-semibold">Runs</span> page; watch it in Runs.
+              Then work the Review tab per problem: spot-check the AI&apos;s grades, add manual
+              grades (fallbacks where the final source leaves an answer undecided), flag — or
+              switch the problem list to <em>By score</em> to compare same-score answers side by
+              side for consistency. Grades become official only once a final grading source is
+              chosen on Publish. Costs are tracked per record; budget caps stop runaway spend.
             </Step>
             <Step>
               <span className="font-semibold">Consensus (optional).</span> If several methods

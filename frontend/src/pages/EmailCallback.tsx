@@ -33,7 +33,7 @@ export function EmailCallback() {
     <div className="flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <div className="pt-2 text-center">
-          <h1 className="text-xl font-semibold tracking-tight text-neutral-900">ADA-Marker</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-neutral-900">AdaGrade</h1>
           <p className="mt-1 text-sm text-neutral-500">
             AI-assisted grading — Algorithm Design &amp; Analysis
           </p>

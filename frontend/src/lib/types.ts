@@ -418,7 +418,7 @@ export type RunItemState = "pending" | "running" | "succeeded" | "failed" | "ski
 /** Per-state leaf counts; absent key = 0. */
 export type RunCounts = Partial<Record<RunItemState, number>>;
 
-export type ScopeKind = "assessment" | "problem" | "answer";
+export type ScopeKind = "assessment" | "problem" | "answer" | "sample";
 
 export interface Run {
   id: number;

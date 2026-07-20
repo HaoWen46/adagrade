@@ -323,6 +323,33 @@ export function OverviewTab({
             detail: "Publishing emails each student their grade and opens the regrade window.",
           };
 
+  // --- step 4: calibration sample (guide §3.1) ------------------------------------
+  const sampleRuns = (runs.data?.runs ?? []).filter((r) => r.scope_kind === "sample");
+  const latestSample = sampleRuns[0];
+  const calibrateStep: StepState = runs.isPending
+    ? loading()
+    : sampleRuns.length === 0
+      ? {
+          badge: "no calibration run",
+          tone: "neutral",
+          detail:
+            "Grade a small stratified sample first (the guide suggests 5–10 answers), hand-grade a few of the same answers, and compare on Analysis before grading the whole class.",
+        }
+      : {
+          badge: `${sampleRuns.length} calibration run${sampleRuns.length === 1 ? "" : "s"} — latest ${latestSample.status}`,
+          tone: latestSample.status === "completed" ? "green" : "indigo",
+          detail:
+            "Compare AI vs hand grades on Analysis; after a rubric or prompt change, re-run the sample before the class-wide run.",
+        };
+
+  // --- step 9: regrades (guide 發布後) ----------------------------------------------
+  const regradeStep: StepState = {
+    badge: assessment.regrade_deadline ? "deadline set" : "no deadline",
+    tone: assessment.regrade_deadline ? "green" : publishedCount > 0 ? "amber" : "neutral",
+    detail:
+      "Students reply to their result email with <p1>…</p1> blocks; adjudicate per problem in the Regrade inbox. Deadline and per-round methods live on Regrade rounds.",
+  };
+
   return (
     <Card title="Grading workflow">
       <ol className="divide-y divide-neutral-100">
@@ -362,6 +389,24 @@ export function OverviewTab({
         />
         <StepRow
           n={4}
+          title="Calibrate on a sample"
+          state={calibrateStep}
+          action={
+            <>
+              {canLaunch && (
+                <Link
+                  to={`/runs?launch=1&assessment_id=${assessmentId}&scope=sample&n=8`}
+                  className={buttonClassName("secondary", "px-2.5 py-1 text-xs")}
+                >
+                  Start calibration run
+                </Link>
+              )}
+              <TabLink href={tabHref("analysis")}>Compare in Analysis →</TabLink>
+            </>
+          }
+        />
+        <StepRow
+          n={5}
           title="AI grading"
           state={gradingStep}
           notices={noticesFor("run_in_progress", "no_rubric_problems")}
@@ -381,7 +426,7 @@ export function OverviewTab({
           }
         />
         <StepRow
-          n={5}
+          n={6}
           title="Review grades"
           state={reviewStep}
           notices={noticesFor(
@@ -392,16 +437,27 @@ export function OverviewTab({
           action={<TabLink href={tabHref("review")}>Open review →</TabLink>}
         />
         <StepRow
-          n={6}
+          n={7}
           title="Choose the final grading source"
           state={finalStep}
           action={<TabLink href={tabHref("publish")}>Choose on Publish →</TabLink>}
         />
         <StepRow
-          n={7}
+          n={8}
           title="Publish grades"
           state={publishStep}
           action={<TabLink href={tabHref("publish")}>Open publish →</TabLink>}
+        />
+        <StepRow
+          n={9}
+          title="Handle regrades"
+          state={regradeStep}
+          action={
+            <>
+              <TabLink href={tabHref("regrades")}>Regrade rounds →</TabLink>
+              <TabLink href="/regrades">Open regrade inbox →</TabLink>
+            </>
+          }
         />
       </ol>
     </Card>

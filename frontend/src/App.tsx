@@ -44,7 +44,7 @@ function Shell() {
     <div className="flex min-h-screen">
       <aside className="flex w-52 shrink-0 flex-col bg-neutral-900 text-neutral-300">
         <div className="px-4 py-4">
-          <span className="text-sm font-semibold tracking-tight text-white">ADA-Marker</span>
+          <span className="text-sm font-semibold tracking-tight text-white">AdaGrade</span>
         </div>
         <nav className="flex flex-1 flex-col gap-0.5 px-2">
           {NAV_ITEMS.filter(
