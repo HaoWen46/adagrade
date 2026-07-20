@@ -1123,6 +1123,36 @@ Four more deltas from the second review pass over the D41-D53 branch:
 
 ---
 
+## 2026-07-20 — PDF-aligned simplification (D69)
+
+**D69 — Calibration sample runs: a fourth run scope `sample` whose `scope_id` is N.**
+(Spec [`2026-07-20-pdf-aligned-simplification-design.md`](superpowers/specs/2026-07-20-pdf-aligned-simplification-design.md);
+migration `0037_sample_scope.sql`.) The TA guide's calibration batch (§3.1) used to require
+one answer-scoped run per sampled answer; a `sample` run draws a deterministic,
+problem-stratified `min(N, pool)` at PLAN time (`grading.SelectCalibrationSample`, seeded by
+run id — the spot-check sampler's idiom, deliberately duplicated rather than factored so
+D37's canonical-sample determinism cannot be perturbed) and persists it as ordinary run
+items, making the draw recorded, reproducible, and re-plan-idempotent. Flagged defaults:
+
+- **Gates run over the whole assessment pool** (mask gate, rubric/refsol blockers,
+  `no_rubric_problems`) since the draw may touch any problem — conservative by design.
+- **Cost preview and the D36 pre-flight budget estimate use `min(N, pool)`**, not the pool.
+- **Sample runs cannot be pinned as the final source** — already enforced structurally by
+  `ErrFinalRunNotAssessmentScope`; they are probes for the Analysis method cards.
+- **Down-migration note:** `assessments_final_run_fk` (0035) is `DEFERRABLE INITIALLY
+  DEFERRED`, so 0037's down must `SET CONSTRAINTS ALL IMMEDIATE` between deleting sample
+  runs and altering the CHECK, or the DDL fails with pending trigger events (SQLSTATE
+  55006) — regression-tested with data present (`TestMigration0037_DownWithSampleRunData`),
+  which the empty-DB `TestMigrations_UpDownUp` structurally cannot catch.
+
+Same round, UI: Overview's workflow card now mirrors the guide's §9 stages (new
+"Calibrate on a sample" and "Handle regrades" steps), ProblemReview gains the §6.3
+"By score" side-by-side view (masked variant only — an unmasked or pageless answer gets an
+explicit placeholder, never the original image), and user-visible "ADA-Marker" strings
+became "AdaGrade" (operational `adamarker`/`ADAMARKER_*` identifiers unchanged).
+
+---
+
 *Not yet decided here (still open in PLAN_GAPS): bounce/complaint webhook handling,
 retention/erasure (B-H7), TA data scoping (B-M15), batch-vs-sync threshold (D11's
 deferred batch APIs), cross-exam reports (Phase 8 remainder), partial-cohort
