@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // typstBinOrSkip mirrors the live-test gating pattern: these tests need a
@@ -75,14 +76,14 @@ func TestBuildTypst_DeterministicPDFWithHostileComment(t *testing.T) {
 	bin := typstBinOrSkip(t)
 	in := typstInput(t)
 
-	a, err := BuildTypst(bin, "", in)
+	a, err := BuildTypst(t.Context(), bin, "", in)
 	if err != nil {
 		t.Fatalf("BuildTypst: %v", err)
 	}
 	if !bytes.HasPrefix(a, []byte("%PDF")) {
 		t.Fatalf("output is not a PDF (first bytes %q)", a[:min(8, len(a))])
 	}
-	b, err := BuildTypst(bin, "", in)
+	b, err := BuildTypst(t.Context(), bin, "", in)
 	if err != nil {
 		t.Fatalf("BuildTypst (second run): %v", err)
 	}
@@ -119,8 +120,36 @@ func TestTypstDocument_SourceKeepsHostileTextQuoted(t *testing.T) {
 	}
 }
 
+// A hostile self-referential LaTeX macro inside a math span drives mitex's
+// expander into unbounded recursion — the compile HANGS rather than erroring,
+// which without a hard kill would never reach the sender's fpdf fallback and
+// would wedge the single-worker email queue (adversarial review, high). The
+// subprocess must be killed at typstCompileTimeout and surface as an error.
+func TestBuildTypst_KillsRunawayMacroExpansion(t *testing.T) {
+	bin := typstBinOrSkip(t)
+	old := typstCompileTimeout
+	typstCompileTimeout = 3 * time.Second
+	t.Cleanup(func() { typstCompileTimeout = old })
+
+	in := typstInput(t)
+	in.Problems[0].Comment = `pathological: \(\newcommand{\bomb}{\bomb\bomb}\bomb\)`
+
+	start := time.Now()
+	_, err := BuildTypst(t.Context(), bin, "", in)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("runaway macro expansion must fail the build, not succeed")
+	}
+	if elapsed > 15*time.Second {
+		t.Fatalf("compile was not killed promptly: took %s", elapsed)
+	}
+	if !strings.Contains(err.Error(), "killed") {
+		t.Fatalf("error should say the compile was killed: %v", err)
+	}
+}
+
 func TestBuildTypst_NoBinaryConfigured(t *testing.T) {
-	if _, err := BuildTypst("", "", typstInput(t)); err == nil {
+	if _, err := BuildTypst(t.Context(), "", "", typstInput(t)); err == nil {
 		t.Fatal("empty binary path must error, not panic or succeed")
 	}
 }

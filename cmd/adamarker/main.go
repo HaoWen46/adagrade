@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -168,7 +169,10 @@ func run(logger *slog.Logger) error {
 		case !cfg.ReportFontConfigured():
 			logger.Warn("ADAMARKER_TYPST_BIN is set but ADAMARKER_REPORT_FONT is not — attachments (and the Typst renderer) stay disabled")
 		default:
-			if _, err := os.Stat(cfg.TypstBinPath); err != nil {
+			// Resolve the same way exec.Command will at send time: a bare name
+			// (no separator) is a PATH lookup, not a filesystem path — os.Stat
+			// would false-warn on a valid `typst` on PATH.
+			if _, err := exec.LookPath(cfg.TypstBinPath); err != nil {
 				logger.Warn("Typst report renderer disabled: binary not found — PDF attachments fall back to fpdf",
 					"typst_bin", cfg.TypstBinPath, "err", err)
 			} else {

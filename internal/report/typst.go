@@ -1,11 +1,16 @@
 package report
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"image"
+	_ "image/jpeg" // registers the JPEG decoder for image.DecodeConfig
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // mitexVersion pins the Typst package that renders LaTeX math (the grading
@@ -13,6 +18,17 @@ import (
 // its local package cache; see .env.adamarker.example's ADAMARKER_TYPST_BIN
 // note for offline pre-seeding.
 const mitexVersion = "0.2.5"
+
+// typstCompileTimeout is a hard cap on the compile subprocess, independent of
+// the caller's deadline. Legitimate reports compile in well under a second;
+// this exists because comment/criterion text is model/TA-derived and assumed
+// hostile — a crafted LaTeX macro inside a math span can drive mitex's
+// expander into unbounded recursion, and without a kill that hang (not a
+// compile *error*, so the fpdf fallback would never run) would wedge the
+// single-worker email queue forever. Well under the queue's 2-minute job
+// timeout so this fires first and the fallback path actually gets reached.
+// A var rather than config so tests can shrink it (MaxZipBytes precedent).
+var typstCompileTimeout = 20 * time.Second
 
 // BuildTypst renders the per-student result PDF with Typst instead of fpdf —
 // same disclosure, but LaTeX math in criterion names and problem comments is
@@ -29,7 +45,7 @@ const mitexVersion = "0.2.5"
 // PII rule: on failure the returned error carries the exit status only, never
 // typst's stderr — compiler diagnostics quote source lines, and the source
 // embeds grading comments.
-func BuildTypst(bin, fontDir string, in ReportInput) ([]byte, error) {
+func BuildTypst(ctx context.Context, bin, fontDir string, in ReportInput) ([]byte, error) {
 	if err := in.validate(); err != nil {
 		return nil, err
 	}
@@ -58,9 +74,16 @@ func BuildTypst(bin, fontDir string, in ReportInput) ([]byte, error) {
 		args = append(args, "--font-path", fontDir)
 	}
 	args = append(args, docPath, outPath)
-	cmd := exec.Command(bin, args...)
+
+	runCtx, cancel := context.WithTimeout(ctx, typstCompileTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, bin, args...)
+	cmd.WaitDelay = 5 * time.Second // SIGKILL then give up if the child ignores cancellation
 	cmd.Stdout, cmd.Stderr = nil, nil // diagnostics can quote comment text — drop them
 	if err := cmd.Run(); err != nil {
+		if runCtx.Err() != nil {
+			return nil, fmt.Errorf("report: typst compile exceeded %s and was killed (%w) — likely a pathological LaTeX macro in a comment; falling back to fpdf", typstCompileTimeout, runCtx.Err())
+		}
 		return nil, fmt.Errorf("report: typst compile failed (%v) — run typst manually on a sample input to diagnose; stderr is suppressed because it can quote grading comments", err)
 	}
 	pdf, err := os.ReadFile(outPath)
@@ -95,10 +118,16 @@ func typstDocument(dir string, in ReportInput) (string, error) {
 			if err := os.WriteFile(filepath.Join(dir, name), resolved, 0o600); err != nil {
 				return "", fmt.Errorf("report: write %s: %w", name, err)
 			}
-			// Height-capped so a portrait scan still fits under the running
-			// header/heading instead of pushing to its own page and leaving
-			// the previous page mostly blank.
-			fmt.Fprintf(&b, "#align(center, image(%s, width: 100%%, height: 21cm, fit: \"contain\"))\n", quotedTypstBare(name))
+			// Sizing depends on orientation. A portrait scan at width:100% is
+			// taller than the page and pushes to its own sheet, leaving the
+			// previous one mostly blank — cap its height. A landscape scan at
+			// width:100% is already short, so a fixed 21cm box would only
+			// letterbox it into a wasteful giant square; let it size naturally.
+			sizing := "width: 100%"
+			if cfg, _, err := image.DecodeConfig(bytes.NewReader(resolved)); err == nil && cfg.Height > cfg.Width {
+				sizing = "width: 100%, height: 21cm, fit: \"contain\""
+			}
+			fmt.Fprintf(&b, "#align(center, image(%s, %s))\n", quotedTypstBare(name), sizing)
 		}
 		if len(p.Criteria) > 0 {
 			b.WriteString("#table(columns: (1fr, auto), stroke: 0.4pt + luma(160), inset: 5pt,\n")

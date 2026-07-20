@@ -1169,12 +1169,19 @@ this. Flagged defaults:
   the generated `.typ` source keeps ALL user text inside escaped string tokens
   (`internal/report/typstmarkup.go`'s auditable invariant) — Typst directives in a
   comment render as literal text — and compiles run under `--root <tempdir>`.
+- **Runaway-compile kill** (adversarial review, high — reproduced): a self-referential
+  LaTeX macro inside a math span drives mitex's expander into unbounded recursion — a
+  HANG, not a compile error, so the fpdf fallback would never run and the single-worker
+  email queue would wedge. The compile subprocess now runs under the caller's context
+  plus a 20s hard timeout (`exec.CommandContext` + `WaitDelay`), regression-tested with
+  the macro bomb.
 - **Determinism**: `--creation-timestamp 0` keeps builds byte-identical for identical
   input (the fpdf invariant), regression-tested.
-- **Disclosure unchanged**: the Typst PDF renders exactly what the email already
-  discloses — per-criterion name/score plus the problem-level comment. `ProblemReport`
-  gained the missing `Comment` field (the email had it; the PDF omitting it was a wiring
-  gap). Per-criterion AI rationales stay out of student output on both surfaces.
+- **Disclosure unchanged**: every attachment shape now renders exactly what the email
+  already discloses — per-criterion name/score plus the problem-level comment, wired
+  into the Typst PDF, the fpdf PDF, and the ZIP grades.txt alike (`ProblemReport` gained
+  the missing `Comment` field; on non-Typst paths LaTeX stays raw source). Per-criterion
+  AI rationales stay out of student output on all surfaces.
 - **PII**: typst stderr is suppressed in errors (compiler diagnostics quote source lines,
   which embed comments).
 - **Ops**: mitex is fetched once into the local Typst package cache (network on first

@@ -77,7 +77,12 @@ func gradesText(in ReportInput) string {
 			}
 			b.WriteString("\n")
 		}
-		fmt.Fprintf(&b, "  Subtotal: %s/%s\n\n", p.Total, p.Max)
+		fmt.Fprintf(&b, "  Subtotal: %s/%s\n", p.Total, p.Max)
+		if p.Comment != "" {
+			// Same problem-level note the email and PDF disclose (D70).
+			fmt.Fprintf(&b, "  Note: %s\n", p.Comment)
+		}
+		b.WriteString("\n")
 	}
 	if in.Total != "" && in.Max != "" {
 		fmt.Fprintf(&b, "Total: %s/%s\n", in.Total, in.Max)

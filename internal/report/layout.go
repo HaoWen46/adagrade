@@ -402,6 +402,27 @@ func drawPanel(pdf *fpdf.Fpdf, p ProblemReport, top float64) {
 	}
 
 	pw.drawSubtotal(p.Total, p.Max)
+	pw.drawProblemComment(p.Comment)
+}
+
+// drawProblemComment draws the problem-level note under the subtotal — the
+// same field the grade email's ProblemBreakdown discloses (D70: the PDF
+// omitting it was a wiring gap), in the criterion-comment grey. Note that on
+// this fpdf path any LaTeX in the comment stays raw source; only the Typst
+// renderer typesets it.
+func (pw *panelWriter) drawProblemComment(comment string) {
+	if comment == "" {
+		return
+	}
+	h := float64(measuredLines(pw.pdf, pw.w, comment, "", criterionSize)) * lineHeight
+	pw.ensureRoom(h)
+
+	pw.pdf.SetXY(pw.x, pw.y)
+	pw.pdf.SetFont(fontFamily, "", criterionSize)
+	pw.pdf.SetTextColor(90, 90, 90)
+	pw.pdf.MultiCell(pw.w, lineHeight, comment, "", "L", false)
+	pw.pdf.SetTextColor(0, 0, 0)
+	pw.y = pw.pdf.GetY()
 }
 
 // drawContinuedPanel renders the abbreviated panel for a problem's later

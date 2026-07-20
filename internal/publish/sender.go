@@ -524,7 +524,7 @@ func (s *Sender) buildAttachment(ctx context.Context, assessmentID, studentID in
 		// so Noto Sans TC resolves without OS installation. Any failure falls
 		// back to fpdf — a Typst hiccup must never fail a send. The logged
 		// error is PII-safe by construction (BuildTypst suppresses stderr).
-		content, err = report.BuildTypst(s.typstBin, filepath.Dir(s.reportFontPath), in)
+		content, err = report.BuildTypst(ctx, s.typstBin, filepath.Dir(s.reportFontPath), in)
 		if err != nil {
 			s.log.Warn("typst report failed; falling back to fpdf", "err", err)
 			content, err = report.Build(s.reportFontPath, in)
