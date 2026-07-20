@@ -1,0 +1,30 @@
+# ADA-Marker reverse proxy — Caddy terminates TLS and forwards plaintext to
+# the app's :8080 HTTP listener (the app itself never speaks TLS; that's the
+# proxy's job, per docs/OPERATIONS.md).
+#
+# Copy to /etc/caddy/Caddyfile and replace the placeholder hostname below with
+# the real one, then: sudo systemctl reload caddy (or restart on first install).
+# Caddy obtains and renews the Let's Encrypt certificate automatically — no
+# manual cert management needed as long as DNS for the hostname points at this
+# host and ports 80/443 are reachable from the internet for the ACME challenge.
+
+grader.example.edu {
+	reverse_proxy 127.0.0.1:8080 {
+		# Generous timeouts: grading pages, PDF ingest, and page-image blob
+		# downloads can be large/slow; the app's own per-route body deadlines
+		# (F5, internal/httpapi) are the real enforcement point.
+		flush_interval -1
+	}
+
+	encode gzip
+
+	# Caddy's access log; rotate via logrotate or Caddy's own `roll` options.
+	# No student PII should appear here beyond what's already in the request
+	# line/status (no bodies are logged).
+	log {
+		output file /var/log/caddy/adamarker-access.log {
+			roll_size 100mb
+			roll_keep 10
+		}
+	}
+}

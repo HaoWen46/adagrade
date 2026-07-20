@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+/* Dense, utilitarian admin base: neutral grays, small type, indigo accent. */
+body {
+  @apply bg-neutral-100 text-sm text-neutral-900 antialiased;
+}

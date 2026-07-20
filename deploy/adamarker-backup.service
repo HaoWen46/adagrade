@@ -1,0 +1,26 @@
+[Unit]
+Description=ADA-Marker nightly backup (blobs then DB, per docs/DECISIONS.md D15)
+After=network-online.target postgresql.service
+
+[Service]
+Type=oneshot
+User=adamarker
+Group=adamarker
+WorkingDirectory=/opt/adamarker
+EnvironmentFile=/etc/adamarker/adamarker.env
+EnvironmentFile=-/etc/adamarker/backup.env
+ExecStart=/opt/adamarker/deploy/backup.sh
+
+# --- Hardening ---------------------------------------------------------------
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/adamarker/data /opt/adamarker/backups
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true

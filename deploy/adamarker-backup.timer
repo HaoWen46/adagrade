@@ -1,0 +1,14 @@
+[Unit]
+Description=Run ADA-Marker nightly backup
+
+[Timer]
+# 02:15 local server time — after typical end-of-day grading activity, before
+# any early-morning cron jobs. Adjust OnCalendar if the VM's grading peak hours
+# differ. RandomizedDelaySec spreads load if this unit is ever templated across
+# multiple hosts; harmless as a no-op on a single VM.
+OnCalendar=*-*-* 02:15:00
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

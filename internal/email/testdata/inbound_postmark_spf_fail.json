@@ -1,0 +1,37 @@
+{
+  "FromName": "Student Two",
+  "MessageStream": "inbound",
+  "From": "s0000002@example.edu",
+  "FromFull": {
+    "Email": "s0000002@example.edu",
+    "Name": "Student Two",
+    "MailboxHash": ""
+  },
+  "To": "regrade+v1.7.1784289600.YW5vdGhlcnNpZw@inbound.example.edu",
+  "ToFull": [
+    {
+      "Email": "regrade+v1.7.1784289600.YW5vdGhlcnNpZw@inbound.example.edu",
+      "Name": "",
+      "MailboxHash": "v1.7.1784289600.YW5vdGhlcnNpZw"
+    }
+  ],
+  "Cc": "",
+  "CcFull": [],
+  "Bcc": "",
+  "BccFull": [],
+  "OriginalRecipient": "regrade+v1.7.1784289600.YW5vdGhlcnNpZw@inbound.example.edu",
+  "Subject": "Re: Midterm 2 — results",
+  "MessageID": "3c9e1f2a-0000-0000-0000-000000000002",
+  "ReplyTo": "",
+  "MailboxHash": "v1.7.1784289600.YW5vdGhlcnNpZw",
+  "Date": "Sun, 5 Jul 2026 09:31:00 -0400",
+  "TextBody": "Forwarded via a mail forwarder that breaks SPF.\n",
+  "HtmlBody": "<p>Forwarded via a mail forwarder that breaks SPF.</p>",
+  "StrippedTextReply": "Forwarded via a mail forwarder that breaks SPF.",
+  "Tag": "",
+  "Headers": [
+    { "Name": "Received-SPF", "Value": "fail (protection.example.edu: domain of example.edu does not designate 10.0.0.9 as permitted sender)" },
+    { "Name": "Authentication-Results", "Value": "example.edu; dkim=fail header.i=@example.edu; spf=fail smtp.mailfrom=s0000002@example.edu" }
+  ],
+  "Attachments": []
+}

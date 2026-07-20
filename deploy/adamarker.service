@@ -1,0 +1,46 @@
+[Unit]
+Description=ADA-Marker grading service
+Documentation=https://github.com/HaoWen46/adagrade
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=adamarker
+Group=adamarker
+WorkingDirectory=/opt/adamarker
+EnvironmentFile=/etc/adamarker/adamarker.env
+ExecStart=/opt/adamarker/bin/adamarker
+
+# Graceful shutdown: on SIGTERM the app soft-stops the River queue and drains
+# in-flight jobs for ADAMARKER_SHUTDOWN_DRAIN (default 5m30s, see
+# internal/config/config.go:81-88) before it exits on its own. TimeoutStopSec
+# MUST exceed that drain window, or systemd's SIGKILL wins the race and a
+# mid-flight grading/identify call is lost instead of finishing or being
+# cleanly snoozed. 6m gives ~30s of headroom over the 5m30s default; if
+# ADAMARKER_SHUTDOWN_DRAIN is overridden in adamarker.env, bump this too.
+KillSignal=SIGTERM
+TimeoutStopSec=6m
+Restart=on-failure
+RestartSec=5s
+
+# --- Hardening ---------------------------------------------------------------
+NoNewPrivileges=true
+ProtectSystem=strict
+# ReadWritePaths must cover the blob store (ADAMARKER_BLOB_DIR), the secret
+# key file's directory (ADAMARKER_SECRET_KEY_FILE), and the backup output dir
+# used by deploy/backup.sh. Adjust if adamarker.env points these elsewhere.
+ReadWritePaths=/opt/adamarker/data /opt/adamarker/backups
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

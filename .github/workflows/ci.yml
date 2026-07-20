@@ -1,0 +1,103 @@
+name: CI
+
+# Live LLM/OCR-provider tests are env-gated (e.g. they read provider API keys / local
+# model paths that CI never sets) and self-skip when those env vars are unset — no
+# special handling needed here. Postgres-backed integration tests are the opposite:
+# they read ADAMARKER_TEST_DATABASE_URL and self-skip ONLY when it's unset, so the
+# `go` job below deliberately sets it against the service container so those tests
+# actually run in CI instead of silently skipping.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: go vet + test (Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: adamarker
+          POSTGRES_PASSWORD: adamarker
+          POSTGRES_DB: adamarker_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U adamarker -d adamarker_test"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    env:
+      ADAMARKER_TEST_DATABASE_URL: postgres://adamarker:adamarker@localhost:5432/adamarker_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      # Runs with ADAMARKER_TEST_DATABASE_URL set above, so the Postgres-backed
+      # integration tests (internal/store/storetest, etc.) actually execute here
+      # rather than self-skipping — the test harness itself drops/recreates the
+      # schema and runs migrations against the service container per test package.
+      - name: go test
+        run: go test ./... -count=1
+
+      # Proves the DEPLOYMENT build path on linux/x86_64 — go test compiles test
+      # binaries, but only `go build ./cmd/adamarker` exercises the exact final
+      # link (incl. the cgo onnxruntime binding) the VM's `make build` performs.
+      - name: go build (deploy binary)
+        run: go build -o /tmp/adamarker ./cmd/adamarker
+
+  frontend:
+    name: frontend build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      # `npm run build` runs `tsc --noEmit && vite build`, so this also gates on
+      # typecheck failures, not just bundling.
+      - name: npm run build
+        run: npm run build
+
+  sqlc:
+    name: sqlc drift check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Fails the job if committed internal/store/db output is stale relative to
+      # sqlc.yaml + internal/store/queries + migrations (sqlc.yaml's schema source).
+      - name: go tool sqlc diff
+        run: go tool sqlc diff

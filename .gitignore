@@ -1,0 +1,29 @@
+# Binaries
+/adamarker
+/bin/
+
+# Runtime data (local-disk blob store, DBs)
+/data/*
+# Committed demo fixtures (regenerate with `make demo-data`)
+!/data/demo/
+
+# Logs & env
+*.log
+.env
+.env.*
+!.env.example
+!.env.adamarker.example
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+internal/web/assets/dist/
+
+# Backups (make db-dump)
+/backups/
+
+# OS / editor
+.DS_Store
+frontend/tsconfig.tsbuildinfo
+scripts/__pycache__/

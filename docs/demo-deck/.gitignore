@@ -1,0 +1,8 @@
+# Build artifacts — deck.pdf is the committed output; everything else is regenerated.
+node_modules/
+package.json
+package-lock.json
+deck.html
+deck-prof.html
+shots/
+qa-slides/

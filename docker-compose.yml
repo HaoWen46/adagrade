@@ -1,0 +1,38 @@
+# Dev/test Postgres for ADA-Marker. Ports 5433/5434 avoid clashing with any host
+# Postgres. `db-test` keeps its data on tmpfs so integration tests start clean-ish
+# (the test harness still drops/recreates schemas itself).
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: adamarker
+      POSTGRES_PASSWORD: adamarker
+      POSTGRES_DB: adamarker
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - adamarker-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adamarker -d adamarker"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  db-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: adamarker
+      POSTGRES_PASSWORD: adamarker
+      POSTGRES_DB: adamarker_test
+    ports:
+      - "127.0.0.1:5434:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adamarker -d adamarker_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+volumes:
+  adamarker-db:

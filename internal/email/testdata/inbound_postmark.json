@@ -1,0 +1,38 @@
+{
+  "FromName": "Student One",
+  "MessageStream": "inbound",
+  "From": "s0000001@example.edu",
+  "FromFull": {
+    "Email": "s0000001@example.edu",
+    "Name": "Student One",
+    "MailboxHash": ""
+  },
+  "To": "regrade+v1.42.1784289600.dGVzdHNpZ25hdHVyZQ@inbound.example.edu",
+  "ToFull": [
+    {
+      "Email": "regrade+v1.42.1784289600.dGVzdHNpZ25hdHVyZQ@inbound.example.edu",
+      "Name": "",
+      "MailboxHash": "v1.42.1784289600.dGVzdHNpZ25hdHVyZQ"
+    }
+  ],
+  "Cc": "",
+  "CcFull": [],
+  "Bcc": "",
+  "BccFull": [],
+  "OriginalRecipient": "regrade+v1.42.1784289600.dGVzdHNpZ25hdHVyZQ@inbound.example.edu",
+  "Subject": "Re: Midterm 2 — results",
+  "MessageID": "3c9e1f2a-0000-0000-0000-000000000001",
+  "ReplyTo": "",
+  "MailboxHash": "v1.42.1784289600.dGVzdHNpZ25hdHVyZQ",
+  "Date": "Sun, 5 Jul 2026 09:30:00 -0400",
+  "TextBody": "I think problem 2 was undercounted. Can you take another look?\n",
+  "HtmlBody": "<p>I think problem 2 was undercounted. Can you take another look?</p>",
+  "StrippedTextReply": "I think problem 2 was undercounted. Can you take another look?",
+  "Tag": "",
+  "Headers": [
+    { "Name": "Received-SPF", "Value": "pass (protection.example.edu: domain of example.edu designates 10.0.0.1 as permitted sender)" },
+    { "Name": "Authentication-Results", "Value": "example.edu; dkim=pass header.i=@example.edu; spf=pass smtp.mailfrom=s0000001@example.edu" },
+    { "Name": "X-Spam-Status", "Value": "No" }
+  ],
+  "Attachments": []
+}

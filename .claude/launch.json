@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "adamarker-e2e",
+      "runtimeExecutable": "./scripts/dev-e2e.sh",
+      "runtimeArgs": [],
+      "port": 8899
+    }
+  ]
+}
