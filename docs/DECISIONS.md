@@ -1153,6 +1153,35 @@ became "AdaGrade" (operational `adamarker`/`ADAMARKER_*` identifiers unchanged).
 
 ---
 
+## 2026-07-20 — Typst result-PDF renderer (D70)
+
+**D70 — LaTeX math in student-facing output finally renders: an optional Typst
+renderer for the result PDF.** (Spec
+[`2026-07-20-typst-report-design.md`](superpowers/specs/2026-07-20-typst-report-design.md).)
+The grading template mandates "LaTeX for math" (D5's transcribe-then-grade), but no
+surface ever rendered it — students got raw `\frac{...}` in comments. With
+`ADAMARKER_TYPST_BIN` set (and the existing `ADAMARKER_REPORT_FONT` attachments gate on),
+PDF attachments are rendered by Typst with LaTeX math typeset via the pinned
+`@preview/mitex` package; any compile failure falls back to fpdf, so sends never fail on
+this. Flagged defaults:
+
+- **Injection hardening**: comments are model/TA text derived from student answers, so
+  the generated `.typ` source keeps ALL user text inside escaped string tokens
+  (`internal/report/typstmarkup.go`'s auditable invariant) — Typst directives in a
+  comment render as literal text — and compiles run under `--root <tempdir>`.
+- **Determinism**: `--creation-timestamp 0` keeps builds byte-identical for identical
+  input (the fpdf invariant), regression-tested.
+- **Disclosure unchanged**: the Typst PDF renders exactly what the email already
+  discloses — per-criterion name/score plus the problem-level comment. `ProblemReport`
+  gained the missing `Comment` field (the email had it; the PDF omitting it was a wiring
+  gap). Per-criterion AI rationales stay out of student output on both surfaces.
+- **PII**: typst stderr is suppressed in errors (compiler diagnostics quote source lines,
+  which embed comments).
+- **Ops**: mitex is fetched once into the local Typst package cache (network on first
+  compile per machine, or pre-seed the cache) — noted in `.env.adamarker.example`.
+
+---
+
 *Not yet decided here (still open in PLAN_GAPS): bounce/complaint webhook handling,
 retention/erasure (B-H7), TA data scoping (B-M15), batch-vs-sync threshold (D11's
 deferred batch APIs), cross-exam reports (Phase 8 remainder), partial-cohort

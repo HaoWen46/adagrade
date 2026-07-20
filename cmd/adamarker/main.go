@@ -160,6 +160,22 @@ func run(logger *slog.Logger) error {
 			logger.Info("report PDF attachments enabled", "font_path", cfg.ReportFontPath)
 		}
 	}
+	// Typst renderer (typst-report spec 2026-07-20): sanity-check the binary
+	// at boot so a typo'd ADAMARKER_TYPST_BIN warns loudly instead of every
+	// send silently falling back to fpdf.
+	if cfg.TypstBinPath != "" {
+		switch {
+		case !cfg.ReportFontConfigured():
+			logger.Warn("ADAMARKER_TYPST_BIN is set but ADAMARKER_REPORT_FONT is not — attachments (and the Typst renderer) stay disabled")
+		default:
+			if _, err := os.Stat(cfg.TypstBinPath); err != nil {
+				logger.Warn("Typst report renderer disabled: binary not found — PDF attachments fall back to fpdf",
+					"typst_bin", cfg.TypstBinPath, "err", err)
+			} else {
+				logger.Info("Typst report renderer enabled (LaTeX math typeset via mitex)", "typst_bin", cfg.TypstBinPath)
+			}
+		}
+	}
 
 	// Email (publish-email-regrade spec §3, D31). Constructed here so the
 	// none-in-production default gets a loud startup warning. The send pipeline
@@ -175,7 +191,7 @@ func run(logger *slog.Logger) error {
 	tokenKey := secrets.Derive(secretKey, "regrade-token-v1")
 	var emailSender queue.EmailSender
 	if cfg.Email.Provider != "none" {
-		emailSender = publish.NewSender(st, emailProvider, tokenKey, cfg.RegradeWindow, cfg.Email.ReplyDomain, logger, blobs, cfg.ReportFontPath)
+		emailSender = publish.NewSender(st, emailProvider, tokenKey, cfg.RegradeWindow, cfg.Email.ReplyDomain, logger, blobs, cfg.ReportFontPath, cfg.TypstBinPath)
 	}
 
 	if runMigrations {

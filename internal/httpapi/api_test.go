@@ -150,7 +150,7 @@ func harnessEnvWithEnv(t *testing.T, extra map[string]string) *testEnv {
 		t.Fatal(err)
 	}
 	tokenKey := secrets.Derive(key, "regrade-token-v1")
-	emailSender := publish.NewSender(s, emailProv, tokenKey, cfg.RegradeWindow, "inbound.example.edu", nil, blobs, cfg.ReportFontPath)
+	emailSender := publish.NewSender(s, emailProv, tokenKey, cfg.RegradeWindow, "inbound.example.edu", nil, blobs, cfg.ReportFontPath, "")
 	qc, err := queue.New(s.Pool, queue.Deps{
 		Runner: runner, Scans: scans, Ingest: ing,
 		Email: emailSender, EmailRate: cfg.Email.Rate,

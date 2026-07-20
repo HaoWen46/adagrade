@@ -140,6 +140,15 @@ type Config struct {
 	// entirely (D43) — publish without attachments still works either way.
 	ReportFontPath string
 
+	// TypstBinPath is the path to a Typst executable (typst-report spec
+	// 2026-07-20). When set, the per-student result PDF is rendered by Typst
+	// — LaTeX math in criterion names and problem comments typesets via the
+	// mitex package instead of appearing as raw source — with the fpdf
+	// renderer as the automatic fallback on any compile failure. Unset means
+	// the fpdf renderer runs exactly as before. Requires ReportFontPath to be
+	// set too (the attachments feature gate is unchanged).
+	TypstBinPath string
+
 	// AppBaseURL is the deployed app's absolute origin (e.g.
 	// https://ada.csie.ntu.edu.tw), used to build absolute deep links in outbound
 	// mail — currently the regrade v2 TA-notify handoff email's "open in app" link
@@ -230,6 +239,7 @@ const (
 
 	// Report PDF font (spec §3, D42/D43) — see Config.ReportFontPath.
 	envReportFont = "ADAMARKER_REPORT_FONT"
+	envTypstBin   = "ADAMARKER_TYPST_BIN"
 
 	// App base URL (whole-branch review F4) — see Config.AppBaseURL.
 	envAppBaseURL                 = "ADAMARKER_APP_BASE_URL"
@@ -255,6 +265,7 @@ func Load(getenv func(string) string) (Config, error) {
 		OCRKeysPath:                getenv(envOCRKeys),
 		ONNXRuntimeLibPath:         getenv(envONNXRuntimeLibPath),
 		ReportFontPath:             getenv(envReportFont),
+		TypstBinPath:               getenv(envTypstBin),
 		AppBaseURL:                 strings.TrimSuffix(strings.TrimSpace(getenv(envAppBaseURL)), "/"),
 		EmailLoginTrustRequestHost: getenv(envEmailLoginTrustRequestHost) != "",
 	}

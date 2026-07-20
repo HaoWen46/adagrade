@@ -212,7 +212,8 @@ transcribe-then-grade 模板（「提示詞即韌體」，隨批改方法一起�
   [不要補上學生沒有寫出的內容],
   [#chg[同左，內建於模板；空白或無法辨認一律標 `illegible`、不給推測分。]],
   [XeLaTeX ＋ ctex ＋ base64 內嵌圖片的 `.tex` 輸出],
-  [#chg[不適用。系統直接產出結果 PDF（發布信附件），不再經過 `.tex` 編譯。]],
+  [#chg[不適用。系統直接產出結果 PDF（發布信附件），不再經過 `.tex` 編譯；伺服器設定
+  Typst（`ADAMARKER_TYPST_BIN`）後，評語中的 LaTeX 數學會在結果 PDF 直接排版呈現，未設定則以原文顯示。]],
   [像論文 review comments 一樣列出具體問題],
   [#chg[模板要求逐條 criterion 給分並附具體評語；評語隨紀錄保存、可人工修改。]],
   [輸出 `batch_scores.xlsx`、`batch_flags.csv`、zip],
@@ -380,7 +381,8 @@ course_grading/
 #chg[_v2.1（2026-07-20）：系統更名 AdaGrade（原 ADA-Marker）；v1 文件移至
 `docs/ta_batch_grading_guide_v1.pdf`；修正三處描述——結果 PDF 附件選項、跨頁答案的處理（conflict 而非
 duplicate）、「修改辨識欄位區域的影響」；原列為「規劃中」的兩項功能上線——校準批一鍵抽樣
-N 份（3.1 節）與同分並排檢視（6.3 節）。紅字仍表示相對 v1.0 的變更。_]
+N 份（3.1 節）與同分並排檢視（6.3 節）；結果 PDF 可改由 Typst 排版，評語中的 LaTeX
+數學直接呈現（5 節）。紅字仍表示相對 v1.0 的變更。_]
 
 #chg[#table(
   columns: (6.5em, 1fr, 1.15fr),
