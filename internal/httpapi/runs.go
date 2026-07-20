@@ -43,9 +43,32 @@ func (s *Server) resolveScope(r *http.Request, assessmentID int64, kind string, 
 			return nil, "answer does not belong to this assessment"
 		}
 		return []int64{scopeID}, ""
+	case "sample":
+		// Calibration run: scope_id is the sample size N, drawn at plan time.
+		// Gates (masks, rubrics, reference solutions) run over the WHOLE
+		// assessment pool since the sample may touch any problem — same
+		// conservative footing as an assessment-scope launch.
+		if scopeID < 1 {
+			return nil, "sample size must be at least 1"
+		}
+		ids, err := s.store.Q.AnswerIDsForAssessment(r.Context(), assessmentID)
+		if err != nil {
+			return nil, "scope resolve failed"
+		}
+		return ids, ""
 	default:
-		return nil, "scope_kind must be assessment|problem|answer"
+		return nil, "scope_kind must be assessment|problem|answer|sample"
 	}
+}
+
+// sampleUnitCount is the estimated leaf count for a scope: min(N, pool) for a
+// sample scope, the full pool otherwise. Keeps the preview's unit count and the
+// pre-flight budget estimate honest for calibration runs.
+func sampleUnitCount(kind string, scopeID int64, poolSize int) int {
+	if kind == "sample" && scopeID < int64(poolSize) {
+		return int(scopeID)
+	}
+	return poolSize
 }
 
 // handleRunPreview is the pre-flight check / cost-estimate endpoint: leaf count
@@ -90,7 +113,8 @@ func (s *Server) handleRunPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"answers": len(ids), "mask_blockers": maskBlockers, "warnings": warnings, "blockers": blockers,
+		"answers":       sampleUnitCount(kind, scopeID, len(ids)),
+		"mask_blockers": maskBlockers, "warnings": warnings, "blockers": blockers,
 	})
 }
 
@@ -524,7 +548,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			apiError(w, http.StatusInternalServerError, "month-to-date spend check failed")
 			return
 		}
-		estimate, estKnown := s.estimateRunCost(r.Context(), cfg.Provider, cfg.Model, int64(len(ids)))
+		estimate, estKnown := s.estimateRunCost(r.Context(), cfg.Provider, cfg.Model,
+			int64(sampleUnitCount(body.ScopeKind, body.ScopeID, len(ids))))
 		if estKnown {
 			projected := new(big.Rat).Add(store.NumRat(mtdNum), store.NumRat(estimate))
 			if projected.Cmp(store.NumRat(budget)) > 0 {
