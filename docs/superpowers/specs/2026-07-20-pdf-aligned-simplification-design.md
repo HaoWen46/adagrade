@@ -20,7 +20,8 @@ admits it: 「校準批目前需逐份啟動；「一鍵抽樣 N 份」為規劃
 - `Runner.Plan`'s scope switch gains `case "sample"`: resolve the assessment's gradeable answers
   (existing `AnswerIDsForAssessment` → `AnswersWithProblems` for problem ids), then take a
   **deterministic, problem-stratified** sample of `min(N, pool)` — round-robin across problems
-  ordered by problem id, within each problem ordered by `SHA-256(runID ‖ answerID)` — the same
+  ordered by problem id, within each problem shuffled by a `math/rand` PRNG seeded from the run
+  id over a stable answer-id base ordering — the same
   determinism idiom as `SelectSpotCheckSample` (trust spec §4), seeded by `runID` so re-planning
   the same run yields the same set, and persisted as ordinary run items (so the sample is
   recorded, reproducible, and visible in the run detail).

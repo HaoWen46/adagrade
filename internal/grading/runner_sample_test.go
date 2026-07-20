@@ -177,6 +177,52 @@ func TestPlan_SampleScope_ClampsToPool(t *testing.T) {
 	}
 }
 
+// Re-planning the same run (River re-delivery, or a transaction that failed
+// after drawing the sample) must reproduce the identical item set — the sample
+// is seeded by run id, so a second draw can neither duplicate nor reshuffle it.
+func TestPlan_SampleScope_ReplanIsIdempotent(t *testing.T) {
+	h := newSpotCheckHarness(t)
+	ctx := context.Background()
+	asmID, mvID := buildSampleAssessment(t, h, 2, 5)
+
+	runID := createSampleRun(t, h, asmID, mvID, 4)
+	if err := h.runner.Plan(ctx, runID); err != nil {
+		t.Fatalf("first plan: %v", err)
+	}
+	first, err := h.st.Q.ListRunItems(ctx, db.ListRunItemsParams{RunID: runID, ItemLimit: 1000})
+	if err != nil {
+		t.Fatalf("list items: %v", err)
+	}
+
+	// Force the pending state a mid-plan failure or re-delivery would leave.
+	if _, err := h.st.Q.SetRunStatus(ctx, db.SetRunStatusParams{ID: runID, Status: "pending"}); err != nil {
+		t.Fatalf("reset status: %v", err)
+	}
+	if err := h.runner.Plan(ctx, runID); err != nil {
+		t.Fatalf("re-plan: %v", err)
+	}
+	second, err := h.st.Q.ListRunItems(ctx, db.ListRunItemsParams{RunID: runID, ItemLimit: 1000})
+	if err != nil {
+		t.Fatalf("list items after re-plan: %v", err)
+	}
+	if len(first) != 4 || len(second) != len(first) {
+		t.Fatalf("re-plan changed the item count: %d -> %d", len(first), len(second))
+	}
+	ids := func(items []db.ListRunItemsRow) map[int64]bool {
+		out := map[int64]bool{}
+		for _, it := range items {
+			out[it.AnswerID] = true
+		}
+		return out
+	}
+	a, b := ids(first), ids(second)
+	for id := range a {
+		if !b[id] {
+			t.Fatalf("re-plan drew a different sample: %v vs %v", a, b)
+		}
+	}
+}
+
 // A non-positive N fails the run with an actionable message, not a mask-gate error.
 func TestPlan_SampleScope_RejectsNonPositiveN(t *testing.T) {
 	h := newSpotCheckHarness(t)

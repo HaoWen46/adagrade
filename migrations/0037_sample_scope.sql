@@ -28,6 +28,11 @@ DELETE FROM spot_checks
 DELETE FROM grading_records
     WHERE run_id IN (SELECT id FROM grading_runs WHERE scope_kind = 'sample');
 DELETE FROM grading_runs WHERE scope_kind = 'sample';
+-- assessments_final_run_fk (migration 0035) is DEFERRABLE INITIALLY DEFERRED,
+-- so the DELETE above queues per-row RI trigger events that would otherwise
+-- make the ALTER TABLE below fail with "pending trigger events" (SQLSTATE
+-- 55006) whenever any sample-scope row existed. Force the checks to run now.
+SET CONSTRAINTS ALL IMMEDIATE;
 ALTER TABLE grading_runs
     DROP CONSTRAINT grading_runs_scope_kind_check;
 ALTER TABLE grading_runs

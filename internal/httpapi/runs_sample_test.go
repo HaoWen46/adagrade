@@ -49,6 +49,30 @@ func TestCreateRun_SampleScope(t *testing.T) {
 	}
 }
 
+// A sample scope gates over the WHOLE assessment (the draw may touch any
+// problem): a rubric-less problem elsewhere in the assessment must surface in
+// the sample preview's warnings exactly as it does for an assessment scope.
+func TestRunPreview_SampleScope_WarnsOnAssessmentWideRubricGaps(t *testing.T) {
+	env, c, aid, _, _ := phase4Setup(t)
+	acceptAllMasks(t, env, c, aid)
+	methodID := createFakeMethod(t, env, c)
+
+	// A second problem with no rubric (and no uploads — the warning must still
+	// fire, since it derives from the assessment's problems, not from answers).
+	postExpect(t, c, fmt.Sprintf("%s/api/assessments/%d/problems", env.ts.URL, aid),
+		map[string]any{"number": 2, "title": "No rubric yet", "max_points": "5"}, http.StatusCreated)
+
+	ws := runPreviewWarnings(t, c, env.ts.URL,
+		fmt.Sprintf("assessment_id=%d&scope_kind=sample&scope_id=2&method_id=%d", aid, methodID))
+	w, ok := ws["no_rubric_problems"]
+	if !ok {
+		t.Fatalf("sample preview must warn about the assessment's rubric-less problem: %v", ws)
+	}
+	if int(w["count"].(float64)) != 1 {
+		t.Fatalf("no_rubric_problems count = %v, want 1", w["count"])
+	}
+}
+
 // N < 1 is rejected at launch with an actionable 400, before any run row exists.
 func TestCreateRun_SampleScope_RejectsBadN(t *testing.T) {
 	env, c, aid, _, _ := phase4Setup(t)

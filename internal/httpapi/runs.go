@@ -349,7 +349,8 @@ func (s *Server) scopedNoRubricCount(ctx context.Context, assessmentID int64, ki
 			return 0, fmt.Errorf("answer fetch: %w", err)
 		}
 		return s.store.Q.CountProblemsWithoutRubricByIDs(ctx, []int64{a.ProblemID})
-	default: // assessment
+	default: // assessment and sample: the sample may touch any problem, so it
+		// gates over the whole assessment — deliberate, not a fallthrough.
 		return s.store.Q.CountProblemsWithoutRubric(ctx, assessmentID)
 	}
 }

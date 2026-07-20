@@ -392,24 +392,35 @@ function CompareCard({ row }: { row: ProblemStudentRow }) {
     staleTime: 30_000,
   });
   const firstPage = answer.data?.pages[0];
+  // Masked variant ONLY: requesting it for an unmasked page 404s server-side
+  // ("no masked derivative yet"), and the strip must never fall back to the
+  // original — it may be shown on a projector. Unmasked and page-less answers
+  // get explicit placeholders instead of SafeImage's misleading retry card.
+  const placeholder = (text: string, tone: string) => (
+    <div className="flex h-52 w-full items-center justify-center rounded-sm border border-neutral-100">
+      <span className={`px-2 text-center text-[11px] ${tone}`}>{text}</span>
+    </div>
+  );
   return (
     <Link
       to={`/answers/${row.answer_id}`}
       className="w-44 shrink-0 rounded-md border border-neutral-200 p-2 hover:border-indigo-300"
     >
-      {firstPage ? (
+      {firstPage?.masked ? (
         <SafeImage
           src={`/api/answer-pages/${firstPage.id}/image?variant=masked`}
           alt={`answer ${row.answer_id} (masked)`}
           className="h-52 w-full rounded-sm border border-neutral-100 object-contain"
         />
+      ) : firstPage ? (
+        placeholder("Not masked yet — run masking to compare this page here.", "text-amber-600")
+      ) : answer.isSuccess ? (
+        placeholder("No submission — nothing to show.", "text-neutral-400")
+      ) : answer.isError ? (
+        placeholder(answer.error.message, "text-red-500")
       ) : (
         <div className="flex h-52 w-full items-center justify-center rounded-sm border border-neutral-100">
-          {answer.isError ? (
-            <span className="px-2 text-center text-[11px] text-red-500">{answer.error.message}</span>
-          ) : (
-            <Spinner className="size-4" />
-          )}
+          <Spinner className="size-4" />
         </div>
       )}
       <div className="mt-1.5 flex items-center justify-between text-xs">
