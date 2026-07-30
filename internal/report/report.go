@@ -54,6 +54,11 @@ type ProblemReport struct {
 	Criteria []CriterionLine
 	Total    string // decimal string (never float64, CLAUDE.md)
 	Max      string
+	// Comment is the problem-level note (grader's overall comment) — the same
+	// field the grade email's ProblemBreakdown already discloses to the
+	// student; per-criterion rationales stay out of student output on both
+	// surfaces (typst-report spec 2026-07-20).
+	Comment string
 }
 
 // ReportInput is everything Build/BuildZIP need to produce one student's

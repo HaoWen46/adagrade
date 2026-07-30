@@ -156,11 +156,11 @@ func seedAnswerWithPage(t *testing.T, st *store.Store, blobs blobstore.Store, as
 }
 
 func newTestSender(st *store.Store, prov domain.EmailProvider) *Sender {
-	return NewSender(st, prov, []byte("0123456789abcdef0123456789abcdef"), 14*24*time.Hour, "inbound.example.edu", nil, nil, "")
+	return NewSender(st, prov, []byte("0123456789abcdef0123456789abcdef"), 14*24*time.Hour, "inbound.example.edu", nil, nil, "", "")
 }
 
 func newTestSenderWithReport(st *store.Store, prov domain.EmailProvider, blobs blobstore.Store, fontPath string) *Sender {
-	return NewSender(st, prov, []byte("0123456789abcdef0123456789abcdef"), 14*24*time.Hour, "inbound.example.edu", nil, blobs, fontPath)
+	return NewSender(st, prov, []byte("0123456789abcdef0123456789abcdef"), 14*24*time.Hour, "inbound.example.edu", nil, blobs, fontPath, "")
 }
 
 // deliveryRef reads the current durable generation for an item. senderJobID is

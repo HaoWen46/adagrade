@@ -22,6 +22,7 @@ import type {
 import { warningView } from "../lib/warnings";
 import { Badge, Card, Spinner, buttonClassName, type BadgeTone } from "../components/ui";
 import { WorkflowNotice } from "../components/WorkflowNotice";
+import { TranscriptionExportCard } from "./TranscriptionExportCard";
 
 export function OverviewTab({
   assessmentId,
@@ -323,88 +324,152 @@ export function OverviewTab({
             detail: "Publishing emails each student their grade and opens the regrade window.",
           };
 
+  // --- step 4: calibration sample (guide §3.1) ------------------------------------
+  const sampleRuns = (runs.data?.runs ?? []).filter((r) => r.scope_kind === "sample");
+  const latestSample = sampleRuns[0];
+  const calibrateStep: StepState = runs.isPending
+    ? loading()
+    : sampleRuns.length === 0
+      ? {
+          badge: "no calibration run",
+          tone: "neutral",
+          detail:
+            "Grade a small stratified sample first (the guide suggests 5–10 answers), hand-grade a few of the same answers, and compare on Analysis before grading the whole class.",
+        }
+      : {
+          badge: `${sampleRuns.length} calibration run${sampleRuns.length === 1 ? "" : "s"} — latest ${latestSample.status}`,
+          tone: latestSample.status === "completed" ? "green" : "indigo",
+          detail:
+            "Compare AI vs hand grades on Analysis; after a rubric or prompt change, re-run the sample before the class-wide run.",
+        };
+
+  // --- step 9: regrades (guide 發布後) ----------------------------------------------
+  const regradeStep: StepState = {
+    badge: assessment.regrade_deadline ? "deadline set" : "no deadline",
+    tone: assessment.regrade_deadline ? "green" : publishedCount > 0 ? "amber" : "neutral",
+    detail:
+      "Students reply to their result email with <p1>…</p1> blocks; adjudicate per problem in the Regrade inbox. Deadline and per-round methods live on Regrade rounds.",
+  };
+
   return (
-    <Card title="Grading workflow">
-      <ol className="divide-y divide-neutral-100">
-        <StepRow
-          n={1}
-          title="Problems & rubrics"
-          state={problemsStep}
-          action={<TabLink href={tabHref("problems")}>Set up problems →</TabLink>}
-        />
-        <StepRow
-          n={2}
-          title="Collect student work"
-          state={collectStep}
-          notices={noticesFor(
-            "stranded_scan_pages",
-            "unidentified_scan_pages",
-            "dead_scan_pages",
-            "text_render_loss",
-            "assigned_unpromoted_pages",
-            "quarantined_uploads",
-            "batch_processing",
-            "unmaterialized_students",
-          )}
-          action={
-            <>
-              <TabLink href={tabHref("submissions")}>One PDF per student → Submissions</TabLink>
-              <TabLink href={tabHref("identify")}>Scanner pile (big PDF/zip) → Identify</TabLink>
-            </>
-          }
-        />
-        <StepRow
-          n={3}
-          title="Mask identities"
-          state={maskStep}
-          notices={noticesFor("mask_errors", "stale_masks")}
-          action={<TabLink href={tabHref("masking")}>Review masks →</TabLink>}
-        />
-        <StepRow
-          n={4}
-          title="AI grading"
-          state={gradingStep}
-          notices={noticesFor("run_in_progress", "no_rubric_problems")}
-          action={
-            gradingStep.loading ? null : canLaunch ? (
-              <Link
-                to={`/runs?launch=1&assessment_id=${assessmentId}`}
-                className={buttonClassName("primary", "px-2.5 py-1 text-xs")}
-              >
-                Start AI grading
-              </Link>
-            ) : noProviders ? (
-              <TabLink href="/providers">Add a provider →</TabLink>
-            ) : (
-              <TabLink href="/methods">Create a method →</TabLink>
-            )
-          }
-        />
-        <StepRow
-          n={5}
-          title="Review grades"
-          state={reviewStep}
-          notices={noticesFor(
-            "superseded_answers",
-            "mixed_method_versions",
-            "adjusted_spot_checks",
-          )}
-          action={<TabLink href={tabHref("review")}>Open review →</TabLink>}
-        />
-        <StepRow
-          n={6}
-          title="Choose the final grading source"
-          state={finalStep}
-          action={<TabLink href={tabHref("publish")}>Choose on Publish →</TabLink>}
-        />
-        <StepRow
-          n={7}
-          title="Publish grades"
-          state={publishStep}
-          action={<TabLink href={tabHref("publish")}>Open publish →</TabLink>}
-        />
-      </ol>
-    </Card>
+    <div className="space-y-4">
+      <Card title="Grading workflow">
+        <ol className="divide-y divide-neutral-100">
+          <StepRow
+            n={1}
+            title="Problems & rubrics"
+            state={problemsStep}
+            action={<TabLink href={tabHref("problems")}>Set up problems →</TabLink>}
+          />
+          <StepRow
+            n={2}
+            title="Collect student work"
+            state={collectStep}
+            notices={noticesFor(
+              "stranded_scan_pages",
+              "unidentified_scan_pages",
+              "dead_scan_pages",
+              "text_render_loss",
+              "assigned_unpromoted_pages",
+              "quarantined_uploads",
+              "batch_processing",
+              "unmaterialized_students",
+            )}
+            action={
+              <>
+                <TabLink href={tabHref("submissions")}>One PDF per student → Submissions</TabLink>
+                <TabLink href={tabHref("identify")}>Scanner pile (big PDF/zip) → Identify</TabLink>
+              </>
+            }
+          />
+          <StepRow
+            n={3}
+            title="Mask identities"
+            state={maskStep}
+            notices={noticesFor("mask_errors", "stale_masks")}
+            action={<TabLink href={tabHref("masking")}>Review masks →</TabLink>}
+          />
+          <StepRow
+            n={4}
+            title="Calibrate on a sample"
+            state={calibrateStep}
+            action={
+              <>
+                {canLaunch && (
+                  <Link
+                    to={`/runs?launch=1&assessment_id=${assessmentId}&scope=sample&n=8`}
+                    className={buttonClassName("secondary", "px-2.5 py-1 text-xs")}
+                  >
+                    Start calibration run
+                  </Link>
+                )}
+                <TabLink href={tabHref("analysis")}>Compare in Analysis →</TabLink>
+              </>
+            }
+          />
+          <StepRow
+            n={5}
+            title="AI grading"
+            state={gradingStep}
+            notices={noticesFor("run_in_progress", "no_rubric_problems")}
+            action={
+              gradingStep.loading ? null : canLaunch ? (
+                <Link
+                  to={`/runs?launch=1&assessment_id=${assessmentId}`}
+                  className={buttonClassName("primary", "px-2.5 py-1 text-xs")}
+                >
+                  Start AI grading
+                </Link>
+              ) : noProviders ? (
+                <TabLink href="/providers">Add a provider →</TabLink>
+              ) : (
+                <TabLink href="/methods">Create a method →</TabLink>
+              )
+            }
+          />
+          <StepRow
+            n={6}
+            title="Review grades"
+            state={reviewStep}
+            notices={noticesFor(
+              "superseded_answers",
+              "mixed_method_versions",
+              "adjusted_spot_checks",
+            )}
+            action={<TabLink href={tabHref("review")}>Open review →</TabLink>}
+          />
+          <StepRow
+            n={7}
+            title="Choose the final grading source"
+            state={finalStep}
+            action={<TabLink href={tabHref("publish")}>Choose on Publish →</TabLink>}
+          />
+          <StepRow
+            n={8}
+            title="Publish grades"
+            state={publishStep}
+            action={<TabLink href={tabHref("publish")}>Open publish →</TabLink>}
+          />
+          <StepRow
+            n={9}
+            title="Handle regrades"
+            state={regradeStep}
+            action={
+              <>
+                <TabLink href={tabHref("regrades")}>Regrade rounds →</TabLink>
+                <TabLink href="/regrades">Open regrade inbox →</TabLink>
+              </>
+            }
+          />
+        </ol>
+      </Card>
+      {/* The LaTeX export lives here, right under the workflow, and is rendered for
+          every assessment from creation onward (spec §6.1): it is object-scoped ("the
+          midterm's LaTeX"), not stage-scoped, so it belongs beside the assessment's
+          home view rather than behind the fifth tab. Its own content is the ladder that
+          says which workflow step still stands between here and the ZIP. */}
+      <TranscriptionExportCard assessmentId={assessmentId} />
+    </div>
   );
 }
 

@@ -35,6 +35,11 @@ type Provider struct {
 	Script            []Step // optional; consumed in order, then default behavior
 	ScorePerCriterion string // default "1"; must be a JSON number
 	Confidence        string // default "high"
+	// Transcription / OverallComment override the canned free-text fields, so a
+	// test can make the fake "read" identity off an imperfectly-masked page and
+	// exercise the pre-persistence identity scrub (B-C10).
+	Transcription  string // default "(fake transcription)"
+	OverallComment string // default "fake comment"
 
 	mu    sync.Mutex
 	Calls []llm.Request // recorded (for assertions); guard with mu when racing Grade
@@ -62,6 +67,8 @@ func (p *Provider) Grade(_ context.Context, model string, req llm.Request) (llm.
 	}
 	confidence := firstNonEmpty(step.Confidence, p.Confidence, "high")
 	score := firstNonEmpty(p.ScorePerCriterion, "1")
+	transcription := firstNonEmpty(p.Transcription, "(fake transcription)")
+	overallComment := firstNonEmpty(p.OverallComment, "fake comment")
 	p.mu.Unlock()
 
 	if step.Err != nil {
@@ -96,9 +103,9 @@ func (p *Provider) Grade(_ context.Context, model string, req llm.Request) (llm.
 		OverallComment string    `json:"overall_comment"`
 		Criteria       []critOut `json:"criteria"`
 	}{
-		Transcription:  "(fake transcription)",
+		Transcription:  transcription,
 		Confidence:     confidence,
-		OverallComment: "fake comment",
+		OverallComment: overallComment,
 		Criteria:       make([]critOut, 0, len(ids)),
 	}
 	for _, id := range ids {

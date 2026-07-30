@@ -55,6 +55,22 @@ type AnswerPage struct {
 	TextLossRuns     int32              `json:"text_loss_runs"`
 }
 
+type AnswerTranscription struct {
+	ID              int64              `json:"id"`
+	AnswerID        int64              `json:"answer_id"`
+	ImageShas       []string           `json:"image_shas"`
+	ModelID         string             `json:"model_id"`
+	PromptVersion   string             `json:"prompt_version"`
+	ParamsHash      string             `json:"params_hash"`
+	Blocks          []byte             `json:"blocks"`
+	Confidence      string             `json:"confidence"`
+	RedactionCounts []byte             `json:"redaction_counts"`
+	InputTokens     pgtype.Int4        `json:"input_tokens"`
+	OutputTokens    pgtype.Int4        `json:"output_tokens"`
+	CostUsd         pgtype.Numeric     `json:"cost_usd"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
 type Assessment struct {
 	ID              int64              `json:"id"`
 	Kind            string             `json:"kind"`

@@ -98,6 +98,71 @@ export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
 }
 
 /**
+ * Reads the download filename out of a Content-Disposition header, preferring the
+ * RFC 5987 `filename*=UTF-8''…` form (it carries the encoding) over the plain
+ * `filename="…"` form. Returns null when the header is absent or carries neither.
+ */
+function filenameFromDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const extended = /filename\*=\s*UTF-8''([^;]+)/i.exec(header);
+  if (extended) {
+    try {
+      return decodeURIComponent(extended[1].trim());
+    } catch {
+      // Malformed percent-encoding — fall through to the plain form.
+    }
+  }
+  const plain = /filename\s*=\s*"([^"]*)"|filename\s*=\s*([^;]+)/i.exec(header);
+  return plain?.[1] ?? plain?.[2]?.trim() ?? null;
+}
+
+/** The server picks the download name, so treat it as untrusted: no path separators,
+ * no control characters, no leading dots. Empty after cleaning falls back. */
+function safeFilename(name: string, fallback: string): string {
+  const cleaned = name
+    .replace(/[/\\]/g, "_")
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/^\.+/, "")
+    .trim();
+  return cleaned === "" ? fallback : cleaned;
+}
+
+/**
+ * Binary download (transcription-export ZIP). Fetches with the session cookie, then
+ * hands the bytes to the browser through an object URL.
+ *
+ * Deliberately not a plain `<a href download>`: the transcription ZIP can take
+ * 20–60s to build on its first (uncached) request, so the caller needs a real
+ * in-flight state and a real error — a bare anchor gives neither, and a server error
+ * would silently render as a broken file. Throws ApiError/UnauthorizedError like the
+ * rest of this client, so callers can drive it with useMutation.
+ */
+export async function apiDownload(path: string, fallbackFilename: string): Promise<void> {
+  const res = await fetch(path, { method: "GET", credentials: "same-origin" });
+  if (!res.ok) {
+    // Always throws (UnauthorizedError on 401, ApiError otherwise).
+    await handle<unknown>(res);
+    return;
+  }
+  const blob = await res.blob();
+  const name = safeFilename(
+    filenameFromDisposition(res.headers.get("Content-Disposition")) ?? fallbackFilename,
+    fallbackFilename,
+  );
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoking synchronously after click() cancels the download in some browsers —
+  // release the object URL on the next macrotask instead.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/**
  * Task T2: RegradeDetail.snapshot arrives as a base64 string — Go's encoding/json
  * marshals a `[]byte` struct field that way, not as embedded raw JSON — so decode then
  * parse it here rather than duplicating this gotcha at every call site. Returns null on

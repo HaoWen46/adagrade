@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -50,6 +51,11 @@ type Sender struct {
 	// than retrying forever.
 	blobs          blobstore.Store
 	reportFontPath string
+	// typstBin, when non-empty, renders PDF attachments with Typst (LaTeX
+	// math typeset via mitex — typst-report spec 2026-07-20); fpdf remains
+	// the automatic fallback on any compile failure, so a Typst hiccup can
+	// never fail a send.
+	typstBin string
 }
 
 // NewSender constructs the send seam. provider must be non-nil (the none provider is
@@ -57,14 +63,14 @@ type Sender struct {
 // job for a none-provider item should not exist). blobs/reportFontPath may be zero
 // (nil/"") for callers that never publish with attachments — SendItem only touches
 // them when the item's batch attachment setting is not "none".
-func NewSender(st *store.Store, provider domain.EmailProvider, tokenKey []byte, window time.Duration, replyDomain string, log *slog.Logger, blobs blobstore.Store, reportFontPath string) *Sender {
+func NewSender(st *store.Store, provider domain.EmailProvider, tokenKey []byte, window time.Duration, replyDomain string, log *slog.Logger, blobs blobstore.Store, reportFontPath, typstBin string) *Sender {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Sender{
 		store: st, provider: provider, tokenKey: tokenKey,
 		window: window, replyDomain: replyDomain, log: log, now: time.Now,
-		blobs: blobs, reportFontPath: reportFontPath,
+		blobs: blobs, reportFontPath: reportFontPath, typstBin: typstBin,
 	}
 }
 
@@ -498,6 +504,10 @@ func (s *Sender) buildAttachment(ctx context.Context, assessmentID, studentID in
 			Criteria: crit,
 			Total:    p.Total,
 			Max:      p.Max,
+			// Same problem-level note the email body already discloses
+			// (gradeDataFromSnapshot); per-criterion rationales stay out of
+			// student output on both surfaces.
+			Comment: p.Comment,
 		})
 	}
 
@@ -508,6 +518,17 @@ func (s *Sender) buildAttachment(ctx context.Context, assessmentID, studentID in
 	if zip {
 		filename, mime = resultFilenameZIP, "application/zip"
 		content, err = report.BuildZIP(in)
+	} else if s.typstBin != "" {
+		// Typst renderer (typst-report spec 2026-07-20): LaTeX math in
+		// comments typesets via mitex. --font-path gets the report-fonts dir
+		// so Noto Sans TC resolves without OS installation. Any failure falls
+		// back to fpdf — a Typst hiccup must never fail a send. The logged
+		// error is PII-safe by construction (BuildTypst suppresses stderr).
+		content, err = report.BuildTypst(ctx, s.typstBin, filepath.Dir(s.reportFontPath), in)
+		if err != nil {
+			s.log.Warn("typst report failed; falling back to fpdf", "err", err)
+			content, err = report.Build(s.reportFontPath, in)
+		}
 	} else {
 		content, err = report.Build(s.reportFontPath, in)
 	}

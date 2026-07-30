@@ -9,6 +9,7 @@ import { AssessmentDetail } from "./pages/AssessmentDetail";
 import { ProblemReview } from "./pages/ProblemReview";
 import { AnswerView } from "./pages/AnswerView";
 import { Students } from "./pages/Students";
+import { StudentPage } from "./pages/StudentPage";
 import { Users } from "./pages/Users";
 import { Methods } from "./pages/Methods";
 import { Providers } from "./pages/Providers";
@@ -44,7 +45,7 @@ function Shell() {
     <div className="flex min-h-screen">
       <aside className="flex w-52 shrink-0 flex-col bg-neutral-900 text-neutral-300">
         <div className="px-4 py-4">
-          <span className="text-sm font-semibold tracking-tight text-white">ADA-Marker</span>
+          <span className="text-sm font-semibold tracking-tight text-white">AdaGrade</span>
         </div>
         <nav className="flex flex-1 flex-col gap-0.5 px-2">
           {NAV_ITEMS.filter(
@@ -111,6 +112,9 @@ export default function App() {
         <Route path="assessments/:aid/problems/:pid/review" element={<ProblemReview />} />
         <Route path="answers/:id" element={<AnswerView />} />
         <Route path="students" element={<Students />} />
+        {/* :sid is the school ID (students.student_id), not the DB id — same vocabulary
+            as the totals table, the CSV, and the export filenames. */}
+        <Route path="students/:sid" element={<StudentPage />} />
         <Route path="methods" element={<Methods />} />
         <Route path="providers" element={<Providers />} />
         <Route path="runs" element={<Runs />} />

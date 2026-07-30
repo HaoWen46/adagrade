@@ -418,7 +418,7 @@ export type RunItemState = "pending" | "running" | "succeeded" | "failed" | "ski
 /** Per-state leaf counts; absent key = 0. */
 export type RunCounts = Partial<Record<RunItemState, number>>;
 
-export type ScopeKind = "assessment" | "problem" | "answer";
+export type ScopeKind = "assessment" | "problem" | "answer" | "sample";
 
 export interface Run {
   id: number;
@@ -1464,4 +1464,170 @@ export interface PublishSnapshot {
   max: string; // decimal string
   all_no_submission: boolean;
   problems: PublishSnapProblem[];
+}
+
+// =====================================================================================
+// --- LaTeX transcription export (spec docs/superpowers/specs/
+// 2026-07-25-latex-transcription-export-design.md) — professor-facing, outside the
+// grading workflow. One ZIP per (assessment, problem).
+// =====================================================================================
+
+/** One problem's row in GET /api/assessments/{id}/transcription-status.
+ *
+ * `cached + pending === answers`: transcriptions are cached content-addressed, so
+ * `pending` is exactly the set that a download would have to pay a provider for.
+ * `est_cost_usd` is a decimal USD string covering only those pending answers — when
+ * `pending` is 0 the download is genuinely free (render "free", not "$0.0000"), and an
+ * empty string means no pricing resolved (render "unknown", never a fake $0 — D35).
+ *
+ * `ready` is false while any of this problem's pages still lacks an accepted mask
+ * (`pages_pending_mask` counts them): both ZIP endpoints refuse with 409 rather than
+ * ship a bundle containing unmasked identities (spec §6.1), so the row offers no
+ * download until the masks land. */
+export interface TranscriptionStatusRow {
+  number: number;
+  title: string;
+  answers: number;
+  cached: number;
+  pending: number;
+  est_cost_usd: string;
+  ready: boolean;
+  pages_pending_mask: number;
+}
+
+/** Gate counts behind the export card's ladder (spec §6.1): each one is the count the
+ * corresponding "waiting on …" line reports, so the UI never has to derive a stage from
+ * a second endpoint. */
+export interface TranscriptionGates {
+  problems: number;
+  students_total: number;
+  students_with_work: number;
+  pages_total: number;
+  pages_mask_accepted: number;
+}
+
+/** GET /api/assessments/{id}/transcription-status.
+ *
+ * `ready` is the exam-level gate — true only when problems exist, some student work
+ * exists, and every page's mask is accepted; the entire-exam ZIP is offered exactly
+ * then. `verified` reports whether a compile gate (tectonic) is available on this
+ * server; when false the `.tex` still exports but is marked unverified in the manifest.
+ * `configured` reports whether a transcription model is configured at all. */
+export interface TranscriptionStatusResponse {
+  model: string;
+  verified: boolean;
+  configured: boolean;
+  ready: boolean;
+  gates: TranscriptionGates;
+  /** Answers across the whole exam that a full-exam download would have to pay for. */
+  total_pending: number;
+  /** Decimal USD string for `total_pending`; "" when no pricing resolved (→ "unknown"). */
+  total_est_cost_usd: string;
+  problems: TranscriptionStatusRow[];
+}
+
+// =====================================================================================
+// --- Per-student page (spec docs/superpowers/specs/2026-07-28-student-page-design.md)
+// Read-only, staff-facing: GET /api/students/{sid} is the cheap summary (header +
+// per-assessment scores), GET /api/students/{sid}/assessments/{aid} the lazy expanded
+// detail (publish/delivery, provenance, regrades). Every score is a decimal string and
+// is NULL — never a fake 0 (D3/D4) — when nothing official exists; the page renders "—"
+// (ungraded) or "absent" (no answer row at all). Student names/emails and regrade
+// verdicts are PII: render only, never console.log (CLAUDE.md).
+// =====================================================================================
+
+/** Header block of GET /api/students/{sid}. `student_id` is the school ID (the same
+ * vocabulary as the totals table, the CSV, and this page's route), not the DB id. */
+export interface StudentProfile {
+  student_id: string;
+  name: string;
+  email: string;
+  withdrawn: boolean;
+}
+
+/** One problem line of a StudentAssessmentRow. `answer_id` null means the student has no
+ * answer row for that problem at all (absent — the row is not clickable); `score` null
+ * means nothing official was recorded yet. */
+export interface StudentAssessmentProblem {
+  number: number;
+  title: string;
+  answer_id: number | null;
+  score: string | null; // decimal string
+  max: string; // decimal string
+}
+
+/** One assessment's collapsed-card summary (newest first in server order). `total` is
+ * null until an official record exists for at least one problem. */
+export interface StudentAssessmentRow {
+  assessment_id: number;
+  name: string;
+  kind: string; // "exam" | "assignment"
+  answers: number;
+  graded: number;
+  total: string | null; // decimal string
+  max: string; // decimal string
+  published: boolean;
+  problems: StudentAssessmentProblem[] | null;
+}
+
+/** GET /api/students/{sid} — 404 when no student carries that school ID. */
+export interface StudentPageResponse {
+  student: StudentProfile;
+  assessments: StudentAssessmentRow[] | null;
+}
+
+/** Publish + delivery state for one (student, assessment). Null on the detail response
+ * when this student was never in a publish batch for the assessment — the page then
+ * renders nothing at all (no badge, no delivery line), never a "not published" claim.
+ * `changed_since_publish` is the "what the student believes vs. what is true" flag:
+ * the official grade now differs from `snapshot_total`, the frozen total they were
+ * emailed. */
+export interface StudentPublishState {
+  batch_created_at?: string;
+  email_status: PublishEmailStatus;
+  sent_at?: string | null;
+  recipient_email: string;
+  snapshot_total: string | null; // decimal string
+  changed_since_publish: boolean;
+}
+
+/** Per-problem provenance from the expanded detail, keyed back to the summary rows by
+ * `number`. `source` is the official record's origin ("human" | "model" | "aggregate");
+ * `model_id` is set only for model records — a bare overridden score that reads as
+ * hand-given is a lie by omission, so both are rendered. `published_score` is what the
+ * publish snapshot said, and differs from `current_score` exactly when `changed`. */
+export interface StudentProblemProvenance {
+  number: number;
+  answer_id: number | null;
+  source: string | null;
+  model_id: string | null;
+  confidence: string | null;
+  flags: string[] | null;
+  published_score: string | null; // decimal string
+  current_score: string | null; // decimal string
+  changed: boolean;
+}
+
+/** One contested problem inside a StudentRegradeRow. `verdict` stays null until a TA
+ * adjudicates it. */
+export interface StudentRegradeProblem {
+  number: number;
+  verdict: string | null; // "upheld" | "regraded"
+}
+
+/** One regrade request touching this (student, assessment). `status` carries whatever
+ * vocabulary the endpoint reports (the queue's RegradeStatus values or condensed forms
+ * like "resolved") — unknown values render verbatim, per lib/labels.ts convention. */
+export interface StudentRegradeRow {
+  request_id: number;
+  received_at?: string;
+  status: string;
+  problems: StudentRegradeProblem[] | null;
+}
+
+/** GET /api/students/{sid}/assessments/{aid} — everything that is not a score. */
+export interface StudentAssessmentDetailResponse {
+  publish: StudentPublishState | null;
+  problems: StudentProblemProvenance[] | null;
+  regrades: StudentRegradeRow[] | null;
 }

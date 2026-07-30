@@ -179,6 +179,14 @@ func (s *Server) Handler(spa http.Handler) http.Handler {
 	// lecturer-gated actions above — Withdraw is reversible and TA/lecturer-safe,
 	// this is not.
 	api.HandleFunc("DELETE /api/students/{id}", s.requireRole(auth.RoleAdmin, s.handleDeleteStudent))
+	// Per-student page (design doc 2026-07-28-student-page-design.md): read-only,
+	// zero-mutation staff view of one student's history, keyed by the SCHOOL id
+	// (students.student_id) rather than the internal row id the mutating routes
+	// above use. Ordinary authed routes, no role gate — the page inherits
+	// AnswerView's exposure and does not widen it (TA data-scoping B-M15 stays
+	// open repo-wide; recorded, not changed, here). See students_page.go.
+	api.HandleFunc("GET /api/students/{sid}", s.handleStudentPage)
+	api.HandleFunc("GET /api/students/{sid}/assessments/{aid}", s.handleStudentAssessmentDetail)
 
 	// Phase 2: ingestion, mapping, masking, blob streaming.
 	api.HandleFunc("POST /api/assessments/{id}/submissions", s.handleUploadSubmissions)
@@ -272,6 +280,13 @@ func (s *Server) Handler(spa http.Handler) http.Handler {
 	// (POST /api/runs/{id}/accept-official removed in 0027 — superseded by the
 	// assessment-level final source; publish enforces the spot-check gate.)
 	api.HandleFunc("GET /api/assessments/{id}/export.csv", s.handleExportCSV)
+
+	// LaTeX transcription export (spec 2026-07-25). Read-only from the grading
+	// system's point of view: it never writes a grading_record and never moves
+	// an official pointer.
+	api.HandleFunc("GET /api/assessments/{id}/transcription-status", s.handleTranscriptionStatus)
+	api.HandleFunc("GET /api/assessments/{id}/problems/{number}/transcription.zip", s.handleTranscriptionZIP)
+	api.HandleFunc("GET /api/assessments/{id}/transcription.zip", s.handleExamTranscriptionZIP)
 
 	// Spot-check gate (trust spec §4, D37): since 0027 the sample must be
 	// verdicted (or admin-waived) before an assessment whose final source is an

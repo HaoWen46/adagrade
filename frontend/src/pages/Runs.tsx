@@ -79,6 +79,10 @@ function isActive(status: RunStatus): boolean {
 interface LaunchPrefill {
   assessmentId: string;
   problemId: string;
+  /** "sample" opens the dialog on the calibration-sample scope (Overview's
+   * "Start calibration run"); sampleN is the pre-filled sample size. */
+  scope?: string;
+  sampleN?: string;
 }
 
 export function Runs() {
@@ -88,6 +92,8 @@ export function Runs() {
       ? {
           assessmentId: searchParams.get("assessment_id") ?? "",
           problemId: searchParams.get("problem_id") ?? "",
+          scope: searchParams.get("scope") ?? undefined,
+          sampleN: searchParams.get("n") ?? undefined,
         }
       : null,
   );
@@ -227,7 +233,9 @@ export function Runs() {
 // --- rows ---------------------------------------------------------------------------
 
 function scopeLabel(kind: ScopeKind, scopeID: number): string {
-  return kind === "assessment" ? "assessment" : `${kind} id ${scopeID}`;
+  if (kind === "assessment") return "assessment";
+  if (kind === "sample") return `sample of ${scopeID}`;
+  return `${kind} id ${scopeID}`;
 }
 
 function RunRow({
@@ -794,10 +802,12 @@ function LaunchRunDialog({
   const queryClient = useQueryClient();
   const [assessmentId, setAssessmentId] = useState(prefill.assessmentId);
   const [scopeKind, setScopeKind] = useState<ScopeKind>(
-    prefill.problemId !== "" ? "problem" : "assessment",
+    prefill.scope === "sample" ? "sample" : prefill.problemId !== "" ? "problem" : "assessment",
   );
   const [problemId, setProblemId] = useState(prefill.problemId);
   const [answerId, setAnswerId] = useState("");
+  // Calibration sample size (guide §3.1 suggests 5–10; default the midpoint).
+  const [sampleN, setSampleN] = useState(prefill.sampleN ?? "8");
   const [methodId, setMethodId] = useState("");
   const [costCap, setCostCap] = useState(""); // decimal string, "" = no cap
 
@@ -846,9 +856,14 @@ function LaunchRunDialog({
       ? assessmentId
       : scopeKind === "problem"
         ? problemId
-        : answerId.trim();
+        : scopeKind === "sample"
+          ? sampleN.trim()
+          : answerId.trim();
   const scopeReady =
-    assessmentId !== "" && scopeId !== "" && (scopeKind !== "answer" || /^\d+$/.test(scopeId));
+    assessmentId !== "" &&
+    scopeId !== "" &&
+    (scopeKind !== "answer" || /^\d+$/.test(scopeId)) &&
+    (scopeKind !== "sample" || /^[1-9]\d*$/.test(scopeId));
 
   // method_id rides along so method-scoped preflight warnings (provider_disabled)
   // can be computed server-side; it's in the queryKey so switching methods refetches.
@@ -963,8 +978,20 @@ function LaunchRunDialog({
               <option value="assessment">assessment</option>
               <option value="problem">problem</option>
               <option value="answer">answer</option>
+              <option value="sample">calibration sample</option>
             </Select>
           </Field>
+          {scopeKind === "sample" && (
+            <Field label="Sample size">
+              <Input
+                required
+                inputMode="numeric"
+                placeholder="5–10"
+                value={sampleN}
+                onChange={(e) => setSampleN(e.target.value)}
+              />
+            </Field>
+          )}
           {scopeKind === "problem" && (
             <Field label="Problem">
               <Select

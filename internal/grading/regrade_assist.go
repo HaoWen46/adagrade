@@ -152,6 +152,15 @@ func (r *Runner) RegradeAssist(ctx context.Context, in RegradeAssistInput) (db.G
 	if err != nil {
 		return db.GradingRecord{}, err
 	}
+	// B-C10: the re-grade record is just as append-only as a run record, so it
+	// gets the same pre-persistence identity scrub. The identity is re-resolved
+	// from the ANSWER's own student rather than trusted from the caller, so this
+	// holds no matter which entry point drove the re-grade. Resolved before the
+	// provider call so a failure here never wastes tokens.
+	identity, err := r.answerIdentity(ctx, answer)
+	if err != nil {
+		return db.GradingRecord{}, err
+	}
 	problem, err := r.Store.Q.GetProblem(ctx, answer.ProblemID)
 	if err != nil {
 		return db.GradingRecord{}, err
@@ -228,6 +237,13 @@ func (r *Runner) RegradeAssist(ctx context.Context, in RegradeAssistInput) (db.G
 			". Respond again following the schema exactly — every rubric criterion exactly once."
 	}
 
+	// Identity scrub BEFORE anything is persisted (B-C10) — same single point as
+	// gradeLeaf, so the transcription/comment columns, the rationales and
+	// raw_output all inherit the scrubbed text.
+	output, redactions := ScrubModelOutput(output, identity)
+	r.logRedactions("regrade: identity survived the mask and was scrubbed from the model output before persistence",
+		redactions, "sub_item_id", in.SubItemID, "answer_id", in.AnswerID)
+
 	// Snap/clamp in Go; the model's arithmetic is never trusted (D4).
 	byID := make(map[int64]db.RubricCriterium, len(criteria))
 	for _, c := range criteria {
@@ -267,10 +283,8 @@ func (r *Runner) RegradeAssist(ctx context.Context, in RegradeAssistInput) (db.G
 	if adjustments != nil {
 		adjJSON, _ = json.Marshal(adjustments)
 	}
-	rawOutput, _ := json.Marshal(map[string]any{
-		"resolved_model": result.Model,
-		"output":         json.RawMessage(result.JSON),
-	})
+	// Scrubbed validated subset, never verbatim provider bytes (B-C10).
+	rawOutput := BuildScrubbedRawOutput(result.Model, output, redactions)
 	costUSD := r.lookupCost(ctx, cfg.Provider, cfg.Model, int64(result.InputTokens), int64(result.OutputTokens))
 
 	// Append the record + link it to the request atomically. The record is source=

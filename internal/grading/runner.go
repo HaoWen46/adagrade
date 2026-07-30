@@ -108,6 +108,15 @@ func (r *Runner) Plan(ctx context.Context, runID int64) error {
 		answerIDs, err = r.Store.Q.AnswerIDsForProblem(ctx, run.ScopeID)
 	case "answer":
 		answerIDs = []int64{run.ScopeID}
+	case "sample":
+		// Calibration run (spec 2026-07-20 §1): scope_id carries the sample size
+		// N; the concrete answer set is drawn deterministically here (seeded by
+		// run id, problem-stratified) and persisted as this run's items, so the
+		// sample is recorded and re-planning is idempotent.
+		if run.ScopeID < 1 {
+			return r.failRun(ctx, runID, "sample size must be at least 1")
+		}
+		answerIDs, err = r.resolveSampleScope(ctx, run.AssessmentID, runID, run.ScopeID)
 	default:
 		return r.failRun(ctx, runID, "unknown scope kind")
 	}
@@ -206,6 +215,30 @@ func isInterruption(ctx context.Context, err error) bool {
 }
 
 // retryableError wraps provider/transient failures so the queue retries the leaf.
+// resolveSampleScope draws a sample-scope run's answer set: the assessment's
+// gradeable answers (same pool as assessment scope), reduced to a
+// deterministic problem-stratified sample of n = the run's scope_id.
+func (r *Runner) resolveSampleScope(ctx context.Context, assessmentID, runID, n int64) ([]int64, error) {
+	ids, err := r.Store.Q.AnswerIDsForAssessment(ctx, assessmentID)
+	if err != nil || len(ids) == 0 {
+		return nil, err
+	}
+	rows, err := r.Store.Q.AnswersWithProblems(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	pool := make([]SampleAnswer, 0, len(rows))
+	for _, row := range rows {
+		pool = append(pool, SampleAnswer{AnswerID: row.ID, ProblemID: row.ProblemID})
+	}
+	sample := SelectCalibrationSample(runID, pool, int(n))
+	out := make([]int64, 0, len(sample))
+	for _, s := range sample {
+		out = append(out, s.AnswerID)
+	}
+	return out, nil
+}
+
 type retryableError struct{ err error }
 
 func (e retryableError) Error() string { return e.err.Error() }
@@ -466,6 +499,12 @@ func (r *Runner) gradeLeaf(ctx context.Context, item db.GradingRunItem, run db.G
 	if err != nil {
 		return err
 	}
+	// B-C10: resolved BEFORE the provider call so a leaf can never spend tokens
+	// and then discover it has no identity to scrub the transcription against.
+	identity, err := r.answerIdentity(ctx, answer)
+	if err != nil {
+		return err
+	}
 	problem, err := r.Store.Q.GetProblem(ctx, answer.ProblemID)
 	if err != nil {
 		return err
@@ -543,6 +582,15 @@ func (r *Runner) gradeLeaf(ctx context.Context, item db.GradingRunItem, run db.G
 			". Respond again following the schema exactly — every rubric criterion exactly once."
 	}
 
+	// Identity scrub BEFORE anything is persisted (B-C10). Runs on the parsed
+	// output, so every downstream artifact — the transcription and comment
+	// columns, criterion_scores' rationales, and raw_output — inherits the
+	// scrubbed text from this one point. Scores/criterion ids pass through
+	// untouched, so the snap/clamp below is unaffected.
+	output, redactions := ScrubModelOutput(output, identity)
+	r.logRedactions("identity survived the mask and was scrubbed from the model output before persistence",
+		redactions, "item_id", item.ID, "run_id", item.RunID, "answer_id", item.AnswerID)
+
 	// Snap/clamp in Go; the model's arithmetic is never trusted (D4).
 	byID := make(map[int64]db.RubricCriterium, len(criteria))
 	for _, c := range criteria {
@@ -584,10 +632,9 @@ func (r *Runner) gradeLeaf(ctx context.Context, item db.GradingRunItem, run db.G
 	}
 	// model_id keeps the method's requested id (leaf identity/idempotence); the
 	// provider-resolved concrete version string is preserved for audit (B-H2).
-	rawOutput, _ := json.Marshal(map[string]any{
-		"resolved_model": result.Model,
-		"output":         json.RawMessage(result.JSON),
-	})
+	// raw_output is the SCRUBBED VALIDATED SUBSET, never the verbatim provider
+	// bytes — see BuildScrubbedRawOutput for why (B-C10).
+	rawOutput := BuildScrubbedRawOutput(result.Model, output, redactions)
 
 	// cost_usd computed HERE, at insert time, from this leaf's own token counts ×
 	// today's pricing row (trust spec §2, D35). No historical backfill: a pricing

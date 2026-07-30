@@ -475,7 +475,7 @@ def choose_final_source_and_publish(api, aid, run):
         die(f"publish preview not publishable: blocked={pv['blocked']} "
             f"not_ingested={pv['not_ingested']} blockers={pv['blockers'][:5]}")
     log(f"[6] coverage: graded={pv['graded']} no_submission={pv['no_submission']} "
-        f"of total={pv['total_answers']}; skipped students={len(pv['skipped'])}")
+        f"of total={pv['total_answers']}; skipped students={len(pv['skipped'] or [])}")
 
     # Exactly the UI's payload (PublishTab publish dialog defaults).
     res = api.post(f"/api/assessments/{aid}/publish", {
