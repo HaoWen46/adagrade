@@ -6,6 +6,7 @@
 // explicit bulk withdraw/reinstate proposals — sync is never automatic.
 
 import { useRef, useState, type FormEvent } from "react";
+import { Link } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api, apiUpload } from "../lib/api";
 import { roleAtLeast, useMe } from "../lib/auth";
@@ -164,7 +165,17 @@ export function Students() {
               ) : null}
               {rows.map((s) => (
                 <tr key={s.id} className={cx("hover:bg-neutral-50", s.withdrawn && "bg-neutral-50 text-neutral-400")}>
-                  <TD className="font-medium tabular-nums">{s.student_id}</TD>
+                  {/* Entry point to the per-student page (spec
+                      2026-07-28-student-page-design.md). Only the ID cell is a link, so
+                      the row's withdraw/reinstate/delete controls keep working as-is. */}
+                  <TD className="font-medium tabular-nums">
+                    <Link
+                      to={`/students/${encodeURIComponent(s.student_id)}`}
+                      className="text-indigo-600 hover:underline"
+                    >
+                      {s.student_id}
+                    </Link>
+                  </TD>
                   <TD>{s.name}</TD>
                   <TD className="text-neutral-500">{s.email}</TD>
                   <TD>

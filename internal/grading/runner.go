@@ -499,6 +499,12 @@ func (r *Runner) gradeLeaf(ctx context.Context, item db.GradingRunItem, run db.G
 	if err != nil {
 		return err
 	}
+	// B-C10: resolved BEFORE the provider call so a leaf can never spend tokens
+	// and then discover it has no identity to scrub the transcription against.
+	identity, err := r.answerIdentity(ctx, answer)
+	if err != nil {
+		return err
+	}
 	problem, err := r.Store.Q.GetProblem(ctx, answer.ProblemID)
 	if err != nil {
 		return err
@@ -576,6 +582,15 @@ func (r *Runner) gradeLeaf(ctx context.Context, item db.GradingRunItem, run db.G
 			". Respond again following the schema exactly — every rubric criterion exactly once."
 	}
 
+	// Identity scrub BEFORE anything is persisted (B-C10). Runs on the parsed
+	// output, so every downstream artifact — the transcription and comment
+	// columns, criterion_scores' rationales, and raw_output — inherits the
+	// scrubbed text from this one point. Scores/criterion ids pass through
+	// untouched, so the snap/clamp below is unaffected.
+	output, redactions := ScrubModelOutput(output, identity)
+	r.logRedactions("identity survived the mask and was scrubbed from the model output before persistence",
+		redactions, "item_id", item.ID, "run_id", item.RunID, "answer_id", item.AnswerID)
+
 	// Snap/clamp in Go; the model's arithmetic is never trusted (D4).
 	byID := make(map[int64]db.RubricCriterium, len(criteria))
 	for _, c := range criteria {
@@ -617,10 +632,9 @@ func (r *Runner) gradeLeaf(ctx context.Context, item db.GradingRunItem, run db.G
 	}
 	// model_id keeps the method's requested id (leaf identity/idempotence); the
 	// provider-resolved concrete version string is preserved for audit (B-H2).
-	rawOutput, _ := json.Marshal(map[string]any{
-		"resolved_model": result.Model,
-		"output":         json.RawMessage(result.JSON),
-	})
+	// raw_output is the SCRUBBED VALIDATED SUBSET, never the verbatim provider
+	// bytes — see BuildScrubbedRawOutput for why (B-C10).
+	rawOutput := BuildScrubbedRawOutput(result.Model, output, redactions)
 
 	// cost_usd computed HERE, at insert time, from this leaf's own token counts ×
 	// today's pricing row (trust spec §2, D35). No historical backfill: a pricing

@@ -9,6 +9,7 @@ import { AssessmentDetail } from "./pages/AssessmentDetail";
 import { ProblemReview } from "./pages/ProblemReview";
 import { AnswerView } from "./pages/AnswerView";
 import { Students } from "./pages/Students";
+import { StudentPage } from "./pages/StudentPage";
 import { Users } from "./pages/Users";
 import { Methods } from "./pages/Methods";
 import { Providers } from "./pages/Providers";
@@ -111,6 +112,9 @@ export default function App() {
         <Route path="assessments/:aid/problems/:pid/review" element={<ProblemReview />} />
         <Route path="answers/:id" element={<AnswerView />} />
         <Route path="students" element={<Students />} />
+        {/* :sid is the school ID (students.student_id), not the DB id — same vocabulary
+            as the totals table, the CSV, and the export filenames. */}
+        <Route path="students/:sid" element={<StudentPage />} />
         <Route path="methods" element={<Methods />} />
         <Route path="providers" element={<Providers />} />
         <Route path="runs" element={<Runs />} />

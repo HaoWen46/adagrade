@@ -321,6 +321,9 @@ export function AssessmentDetail() {
         <ConsensusTab assessmentId={id} onGoToReview={() => setTab("review")} />
       )}
       {tab === "regrades" && <RegradeRoundsTab assessmentId={id} />}
+      {/* The LaTeX transcription export used to sit here under Totals; it now lives on
+          the Overview tab as an always-present ladder card (spec §6.1) — one surface,
+          one truth, and no second copy to fall out of sync. */}
       {tab === "totals" && (
         <TotalsCard assessmentId={id} finalSourceKind={assessment.final_source_kind} />
       )}
@@ -537,7 +540,7 @@ function TotalsCard({
               </tr>
             )}
             {rows.map((row) => (
-              <TotalsRow key={row.student_id} row={row} />
+              <TotalsRow key={row.student_id} row={row} assessmentId={assessmentId} />
             ))}
           </tbody>
         </Table>
@@ -546,10 +549,26 @@ function TotalsCard({
   );
 }
 
-function TotalsRow({ row }: { row: AssessmentTotalRow }) {
+function TotalsRow({
+  row,
+  assessmentId,
+}: {
+  row: AssessmentTotalRow;
+  assessmentId: string;
+}) {
   return (
     <tr>
-      <TD className="font-medium tabular-nums">{row.student_id}</TD>
+      {/* The student cell is the entry point to the per-student page (spec
+          2026-07-28-student-page-design.md); ?assessment= lands it pre-expanded on the
+          exam being looked at right now. */}
+      <TD className="font-medium tabular-nums">
+        <Link
+          to={`/students/${encodeURIComponent(row.student_id)}?assessment=${assessmentId}`}
+          className="text-indigo-600 hover:underline"
+        >
+          {row.student_id}
+        </Link>
+      </TD>
       <TD>
         {row.name}
         {/* Roster-lifecycle (plan 2026-07-10, locked semantics e): withdrawn students
