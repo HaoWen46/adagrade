@@ -141,3 +141,53 @@ func TestGateFailureMessage_NamesStudentsAndDistinguishesTimeout(t *testing.T) {
 		t.Errorf("a timeout is not a compile failure and must not be reported as one, got %q", msg)
 	}
 }
+
+// --- secondary Typst gate (spec 2026-07-30) --------------------------------
+
+// fakeTypst mirrors typst's CLI shape (source second-to-last arg, output
+// last), failing exactly when the source contains the marker.
+func fakeTypst(t *testing.T, marker string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "fake-typst")
+	script := "#!/bin/sh\nprev=\"\"; last=\"\"\nfor a in \"$@\"; do prev=\"$last\"; last=\"$a\"; done\nif grep -q " + marker + " \"$prev\"; then exit 1; fi\nprintf 'PDF' > \"$last\"\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+func typstGateInput() export.Input {
+	return export.Input{
+		AssessmentName: "Midterm",
+		ProblemNumber:  1,
+		Answers: []export.Answer{{
+			Identity: regrade.Identity{StudentID: "AAA001"},
+			Doc:      transcribe.Doc{Blocks: []transcribe.Block{{Kind: transcribe.BlockProse, Text: "has TYPMARKER inside"}}},
+			Status:   export.StatusOK,
+			Source:   export.SourceDedicated,
+		}},
+	}
+}
+
+func TestTypstVerdict_BestEffortNeverBlocks(t *testing.T) {
+	in := typstGateInput()
+
+	// Failing mirror -> "failed": the caller ships the bundle regardless and
+	// the manifest records the verdict (export tests pin that rendering).
+	s := &Server{cfg: config.Config{TypstBinPath: fakeTypst(t, "TYPMARKER")}, log: discardLogger()}
+	if got := s.typstVerdict(context.Background(), in); got != "failed" {
+		t.Errorf("failing mirror must report failed, got %q", got)
+	}
+
+	// Clean mirror -> "verified".
+	s = &Server{cfg: config.Config{TypstBinPath: fakeTypst(t, "NEVERPRESENT")}, log: discardLogger()}
+	if got := s.typstVerdict(context.Background(), in); got != "verified" {
+		t.Errorf("clean mirror must report verified, got %q", got)
+	}
+
+	// No binary -> "" (manifest renders "unverified").
+	s = &Server{cfg: config.Config{}, log: discardLogger()}
+	if got := s.typstVerdict(context.Background(), in); got != "" {
+		t.Errorf("unconfigured mirror must report empty verdict, got %q", got)
+	}
+}

@@ -21,6 +21,7 @@ import (
 	"github.com/HaoWen46/adagrade/internal/imaging"
 	"github.com/HaoWen46/adagrade/internal/llm"
 	"github.com/HaoWen46/adagrade/internal/regrade"
+	"github.com/HaoWen46/adagrade/internal/report"
 	"github.com/HaoWen46/adagrade/internal/store"
 	"github.com/HaoWen46/adagrade/internal/store/db"
 	"github.com/HaoWen46/adagrade/internal/transcribe"
@@ -199,8 +200,12 @@ type transcriptionProblemStatus struct {
 }
 
 type transcriptionStatusResponse struct {
-	Model           string                       `json:"model"`
-	Verified        bool                         `json:"verified"`
+	Model    string `json:"model"`
+	Verified bool   `json:"verified"`
+	// Typst reports whether bundles will carry a compile-checked Typst
+	// mirror (spec 2026-07-30) — config knowledge, not a build outcome; the
+	// per-build verdict lives in the bundle's manifest.
+	Typst           bool                         `json:"typst"`
 	Configured      bool                         `json:"configured"`
 	Ready           bool                         `json:"ready"`
 	Gates           transcriptionGateCounts      `json:"gates"`
@@ -230,6 +235,7 @@ func (s *Server) handleTranscriptionStatus(w http.ResponseWriter, r *http.Reques
 	out := transcriptionStatusResponse{
 		Model:      s.transcribeModel(),
 		Verified:   s.cfg.TectonicBinPath != "",
+		Typst:      s.cfg.TypstBinPath != "",
 		Configured: true,
 		Gates: transcriptionGateCounts{
 			Problems:         int64(len(gates)),
@@ -377,6 +383,7 @@ func (s *Server) handleTranscriptionZIP(w http.ResponseWriter, r *http.Request) 
 		apiError(w, http.StatusInternalServerError, gateFailureMessage(number, err))
 		return
 	}
+	in.TypstVerdict = s.typstVerdict(r.Context(), in)
 
 	zipBytes, err := export.BuildZIP(in)
 	if err != nil {
@@ -456,12 +463,13 @@ func (s *Server) handleExamTranscriptionZIP(w http.ResponseWriter, r *http.Reque
 		apiError(w, http.StatusBadRequest, "no answers for this assessment")
 		return
 	}
-	for _, in := range out.Problems {
+	for i, in := range out.Problems {
 		if err := s.verifyProblemTeX(r.Context(), in); err != nil {
 			s.log.Error("transcription compile gate failed", "assessment_id", aid, "problem", in.ProblemNumber, "err", errContentFree(err))
 			apiError(w, http.StatusInternalServerError, gateFailureMessage(in.ProblemNumber, err))
 			return
 		}
+		out.Problems[i].TypstVerdict = s.typstVerdict(r.Context(), in)
 	}
 
 	zipBytes, err := export.BuildExamZIP(out)
@@ -742,6 +750,32 @@ func (s *Server) verifyProblemTeX(ctx context.Context, in export.Input) error {
 		return fmt.Errorf("compile gate: every answer fails standalone — environment fault, not student content: %w", err)
 	}
 	return ge
+}
+
+// typstVerdict is the SECONDARY compile gate (spec 2026-07-30): one
+// best-effort compile of the bundle's _all.typ mirror. It never blocks — a
+// failed mirror ships anyway with its verdict in the manifest header. ""
+// means no Typst binary is configured (rendered "unverified").
+func (s *Server) typstVerdict(ctx context.Context, in export.Input) string {
+	if s.cfg.TypstBinPath == "" {
+		return ""
+	}
+	src, err := export.AllTyp(in)
+	if err != nil {
+		s.log.Warn("typst mirror assembly failed", "problem", in.ProblemNumber, "err", errContentFree(err))
+		return "failed"
+	}
+	fontDir := ""
+	if s.cfg.ReportFontPath != "" {
+		fontDir = filepath.Dir(absFontPath(s.cfg.ReportFontPath))
+	}
+	if _, err := report.CompileTypstSource(ctx, s.cfg.TypstBinPath, fontDir, src); err != nil {
+		// Compile error, timeout, engine trouble — all just "failed": the
+		// mirror is best-effort and the log stays content-free.
+		s.log.Warn("typst mirror compile failed", "problem", in.ProblemNumber, "err", errContentFree(err))
+		return "failed"
+	}
+	return "verified"
 }
 
 // gateError is a compile-gate failure attributed to the specific answers
