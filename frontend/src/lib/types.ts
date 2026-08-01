@@ -1516,6 +1516,8 @@ export interface TranscriptionGates {
 export interface TranscriptionStatusResponse {
   model: string;
   verified: boolean;
+  /** Whether bundles carry a compile-checked Typst mirror (typ/) beside the LaTeX. */
+  typst: boolean;
   configured: boolean;
   ready: boolean;
   gates: TranscriptionGates;
