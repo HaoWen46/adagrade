@@ -141,6 +141,11 @@ type Input struct {
 	// every document in the bundle, which is what lets _all.tex carry a single
 	// preamble.
 	TeX transcribe.Options
+	// TypstVerdict is the secondary compile gate's outcome for the Typst
+	// mirror: "verified", "failed", or "" (rendered "unverified" — no Typst
+	// binary configured). It lands in the manifest as a header comment; a
+	// failed mirror never blocks the bundle (spec 2026-07-30, LaTeX primary).
+	TypstVerdict string
 }
 
 // RootDir is the archive's single top-level directory, {slug}-p{n}. Exported
@@ -184,7 +189,8 @@ var manifestColumns = []string{"student_id", "pseudonym", "pages", "status", "so
 // purpose: the warning has to travel with the file, because the file is the
 // one artifact in the bundle that must not be uploaded.
 const manifestNotice = "# ADA-Marker transcription export — LOCAL DECODER RING, do not upload this file.\n" +
-	"# It maps pseudonyms back to student ids; _all.tex is the upload-safe artifact.\n"
+	"# It maps pseudonyms back to student ids; _all.tex (authoritative) and its\n" +
+	"# _all.typ mirror are the upload-safe artifacts.\n"
 
 // BuildZIP packages the answers into the spec §3 bundle:
 //
@@ -308,6 +314,65 @@ func AllTeX(in Input) (string, error) {
 	return "", fmt.Errorf("export: no _all.tex entry produced")
 }
 
+// AllTyp returns the exact _all.typ source BuildZIP would place in this
+// problem's tree — the secondary gate compiles these bytes, so they must be
+// the bytes the professor receives (pinned by test, same invariant as AllTeX).
+func AllTyp(in Input) (string, error) {
+	answers, err := in.validated()
+	if err != nil {
+		return "", err
+	}
+	entries, err := problemEntries(in, answers, "")
+	if err != nil {
+		return "", err
+	}
+	want := in.RootDir() + "/_all.typ"
+	for _, e := range entries {
+		if e.name == want {
+			return string(e.body), nil
+		}
+	}
+	// Structurally unreachable: problemEntries always writes _all.typ.
+	return "", fmt.Errorf("export: no _all.typ entry produced")
+}
+
+// AnswerTeX pairs one answer's standalone document with the student id that
+// names it in the archive. Status lets the compile gate skip attribution
+// work that cannot matter (an absent answer carries no student content).
+type AnswerTeX struct {
+	StudentID string
+	TeX       string
+	Status    Status
+}
+
+// AnswerTeXes returns each validated answer's STANDALONE .tex — byte-identical
+// to the tex/{id}.tex entries BuildZIP writes (pinned by test) — in bundle
+// (id-sorted) order. The compile gate uses it to attribute a bundle failure to
+// the specific answer(s) that cannot compile, instead of refusing the whole
+// cohort with an anonymous error (2026-07-30 audit).
+func AnswerTeXes(in Input) ([]AnswerTeX, error) {
+	answers, err := in.validated()
+	if err != nil {
+		return nil, err
+	}
+	preamble := transcribe.Preamble(in.TeX)
+	problemTitle := fmt.Sprintf("Problem %d", in.ProblemNumber)
+	out := make([]AnswerTeX, 0, len(answers))
+	for _, a := range answers {
+		scrubbed, _ := scrubDoc(a.Doc, a.Identity)
+		body, _, err := emitSection(scrubbed, problemTitle, a.Status, in.TeX)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, AnswerTeX{
+			StudentID: a.Identity.StudentID,
+			TeX:       preamble + beginDocument + body + endDocument,
+			Status:    a.Status,
+		})
+	}
+	return out, nil
+}
+
 // entry is one file in the archive, already named and already assembled. The
 // list is built in full before a single byte is compressed so the entry ORDER —
 // the thing determinism depends on — is visible in one place rather than spread
@@ -338,8 +403,18 @@ func problemEntries(in Input, answers []Answer, prefix string) ([]entry, error) 
 	all.WriteString(preamble)
 	all.WriteString(beginDocument)
 
+	// The Typst mirror aggregate (spec 2026-07-30): same sections, same
+	// pseudonyms, one Typst preamble. LaTeX stays authoritative.
+	typPreamble := transcribe.TypstPreamble()
+	var allTyp strings.Builder
+	fmt.Fprintf(&allTyp, "// ADA-Marker transcription export — problem %d, %d students (Typst mirror).\n", in.ProblemNumber, len(answers))
+	allTyp.WriteString("// The LaTeX bundle (tex/, _all.tex) is authoritative; this mirror is best-effort.\n")
+	allTyp.WriteString("// Sections are pseudonymous and ordered by student id; this file carries no identity.\n")
+	allTyp.WriteString(typPreamble)
+
 	rows := make([][]string, 0, len(answers))
 	texFiles := make([]entry, 0, len(answers))
+	typFiles := make([]entry, 0, len(answers))
 	imageFiles := make([]entry, 0, len(answers))
 
 	for i, a := range answers {
@@ -364,6 +439,16 @@ func problemEntries(in Input, answers []Answer, prefix string) ([]entry, error) 
 		}
 		all.WriteString(section)
 
+		// Typst mirror: per-student standalone plus the aggregate section.
+		// Flags are deliberately discarded — the emitter parity invariant
+		// makes them identical to emitSection's, which the manifest carries.
+		typFiles = append(typFiles, entry{
+			name:   root + "/typ/" + a.Identity.StudentID + ".typ",
+			method: zip.Deflate,
+			body:   []byte(typPreamble + typstSection(scrubbed, problemTitle, a.Status)),
+		})
+		allTyp.WriteString(typstSection(scrubbed, alias, a.Status))
+
 		for pageIdx, p := range a.Pages {
 			imageFiles = append(imageFiles, entry{
 				name: root + "/images/" + imageName(a.Identity.StudentID, pageIdx, len(a.Pages)),
@@ -387,19 +472,26 @@ func problemEntries(in Input, answers []Answer, prefix string) ([]entry, error) 
 	}
 	all.WriteString(endDocument)
 
-	manifest, err := renderManifest(rows)
+	typstVerdict := in.TypstVerdict
+	if typstVerdict == "" {
+		typstVerdict = "unverified"
+	}
+	manifest, err := renderManifest(rows, typstVerdict)
 	if err != nil {
 		return nil, err
 	}
 
 	// Fixed entry order, so the archive bytes do not depend on map iteration or
-	// on the caller's slice order.
-	out := make([]entry, 0, 2+len(texFiles)+len(imageFiles))
+	// on the caller's slice order. tex/ precedes the Typst mirror: LaTeX is
+	// the primary format and the layout says so.
+	out := make([]entry, 0, 3+len(texFiles)+len(typFiles)+len(imageFiles))
 	out = append(out,
 		entry{name: root + "/_all.tex", method: zip.Deflate, body: []byte(all.String())},
 		entry{name: root + "/MANIFEST.csv", method: zip.Deflate, body: manifest},
 	)
 	out = append(out, texFiles...)
+	out = append(out, entry{name: root + "/_all.typ", method: zip.Deflate, body: []byte(allTyp.String())})
+	out = append(out, typFiles...)
 	out = append(out, imageFiles...)
 	return out, nil
 }
@@ -445,6 +537,13 @@ func (in Input) validated() ([]Answer, error) {
 	}
 	if len(in.Answers) == 0 {
 		return nil, fmt.Errorf("export: no answers to export")
+	}
+	switch in.TypstVerdict {
+	case "", "verified", "failed":
+	default:
+		// The verdict is interpolated into the manifest ahead of the CSV
+		// header; anything outside the closed set could forge a record.
+		return nil, fmt.Errorf("export: typst verdict %q is not one of \"\"|verified|failed", in.TypstVerdict)
 	}
 
 	seen := make(map[string]int, len(in.Answers))
@@ -543,6 +642,20 @@ func emitSection(d transcribe.Doc, title string, status Status, _ transcribe.Opt
 	return body, flags, nil
 }
 
+// typstSection mirrors emitSection for the Typst mirror. Flags are not
+// returned: the emitter parity invariant (transcribe/typst.go) makes them
+// identical to emitSection's, and the manifest takes them from the LaTeX
+// pass. The status comment uses Typst's line-comment form; the status is a
+// closed enum, so it can never carry content.
+func typstSection(d transcribe.Doc, title string, status Status) string {
+	d.Title = title
+	body, _ := transcribe.EmitTypstBody(d)
+	if status != StatusOK {
+		body = fmt.Sprintf("// status: %s\n%s", status, body)
+	}
+	return body
+}
+
 func pseudonymWidth(n int) int {
 	if w := len(strconv.Itoa(n)); w > 3 {
 		return w
@@ -622,9 +735,12 @@ func redactionFlag(c regrade.RedactionCounts) []string {
 
 // ---- manifest ------------------------------------------------------------
 
-func renderManifest(rows [][]string) ([]byte, error) {
+func renderManifest(rows [][]string, typstVerdict string) ([]byte, error) {
 	var buf bytes.Buffer
 	buf.WriteString(manifestNotice)
+	// The secondary gate's bundle-level verdict (spec 2026-07-30): a failed
+	// Typst mirror ships anyway, so the manifest must say so somewhere.
+	buf.WriteString("# typst: " + typstVerdict + "\n")
 
 	w := csv.NewWriter(&buf) // '\n' line endings by default: deterministic.
 	if err := w.Write(manifestColumns); err != nil {

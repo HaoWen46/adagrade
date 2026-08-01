@@ -21,6 +21,7 @@ import (
 	"github.com/HaoWen46/adagrade/internal/imaging"
 	"github.com/HaoWen46/adagrade/internal/llm"
 	"github.com/HaoWen46/adagrade/internal/regrade"
+	"github.com/HaoWen46/adagrade/internal/report"
 	"github.com/HaoWen46/adagrade/internal/store"
 	"github.com/HaoWen46/adagrade/internal/store/db"
 	"github.com/HaoWen46/adagrade/internal/transcribe"
@@ -199,8 +200,12 @@ type transcriptionProblemStatus struct {
 }
 
 type transcriptionStatusResponse struct {
-	Model           string                       `json:"model"`
-	Verified        bool                         `json:"verified"`
+	Model    string `json:"model"`
+	Verified bool   `json:"verified"`
+	// Typst reports whether bundles will carry a compile-checked Typst
+	// mirror (spec 2026-07-30) — config knowledge, not a build outcome; the
+	// per-build verdict lives in the bundle's manifest.
+	Typst           bool                         `json:"typst"`
 	Configured      bool                         `json:"configured"`
 	Ready           bool                         `json:"ready"`
 	Gates           transcriptionGateCounts      `json:"gates"`
@@ -230,6 +235,7 @@ func (s *Server) handleTranscriptionStatus(w http.ResponseWriter, r *http.Reques
 	out := transcriptionStatusResponse{
 		Model:      s.transcribeModel(),
 		Verified:   s.cfg.TectonicBinPath != "",
+		Typst:      s.cfg.TypstBinPath != "",
 		Configured: true,
 		Gates: transcriptionGateCounts{
 			Problems:         int64(len(gates)),
@@ -374,9 +380,10 @@ func (s *Server) handleTranscriptionZIP(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := s.verifyProblemTeX(r.Context(), in); err != nil {
 		s.log.Error("transcription compile gate failed", "assessment_id", aid, "problem", number, "err", errContentFree(err))
-		apiError(w, http.StatusInternalServerError, fmt.Sprintf("problem %d: generated LaTeX failed to compile — not shipping an unverified bundle", number))
+		apiError(w, http.StatusInternalServerError, gateFailureMessage(number, err))
 		return
 	}
+	in.TypstVerdict = s.typstVerdict(r.Context(), in)
 
 	zipBytes, err := export.BuildZIP(in)
 	if err != nil {
@@ -456,12 +463,18 @@ func (s *Server) handleExamTranscriptionZIP(w http.ResponseWriter, r *http.Reque
 		apiError(w, http.StatusBadRequest, "no answers for this assessment")
 		return
 	}
+	// Blocking gates first, best-effort mirror second: interleaving would let
+	// mirror compiles eat the request budget before a later problem's BLOCKING
+	// gate runs, converting an attributable refusal into a timeout.
 	for _, in := range out.Problems {
 		if err := s.verifyProblemTeX(r.Context(), in); err != nil {
 			s.log.Error("transcription compile gate failed", "assessment_id", aid, "problem", in.ProblemNumber, "err", errContentFree(err))
-			apiError(w, http.StatusInternalServerError, fmt.Sprintf("problem %d: generated LaTeX failed to compile — not shipping an unverified bundle", in.ProblemNumber))
+			apiError(w, http.StatusInternalServerError, gateFailureMessage(in.ProblemNumber, err))
 			return
 		}
+	}
+	for i, in := range out.Problems {
+		out.Problems[i].TypstVerdict = s.typstVerdict(r.Context(), in)
 	}
 
 	zipBytes, err := export.BuildExamZIP(out)
@@ -673,10 +686,15 @@ func (s *Server) transcribeAnswer(ctx context.Context, answerID int64, shas []st
 
 // verifyProblemTeX is the compile gate (spec §2 stage 4): one tectonic compile
 // of the problem's _all.tex verifies every student body in the bundle, because
-// they all share one preamble and the validator guarantees each body is brace-
-// and environment-balanced (so a body cannot swallow its successor). When no
-// engine is configured the gate is a no-op and the status endpoint's `verified`
-// field already tells the UI so — the bundle ships unverified, never blocked.
+// they all share one preamble. When no engine is configured the gate is a
+// no-op and the status endpoint's `verified` field already tells the UI so —
+// the bundle ships unverified, never blocked.
+//
+// When the bundle FAILS, the gate compiles each answer's standalone document —
+// the same bytes the archive ships as tex/{id}.tex — and returns a *gateError
+// naming the offending answer(s) (2026-07-30 audit finding 8). Before this, a
+// single pathological answer refused the whole cohort with an error nobody
+// could act on.
 func (s *Server) verifyProblemTeX(ctx context.Context, in export.Input) error {
 	if s.cfg.TectonicBinPath == "" {
 		return nil
@@ -685,8 +703,127 @@ func (s *Server) verifyProblemTeX(ctx context.Context, in export.Input) error {
 	if err != nil {
 		return err
 	}
-	_, err = transcribe.Compile(ctx, s.cfg.TectonicBinPath, transcribe.DefaultCacheDir(), tex)
-	return err
+	cache := transcribe.DefaultCacheDir()
+	if _, err = transcribe.Compile(ctx, s.cfg.TectonicBinPath, cache, tex); err == nil {
+		return nil
+	}
+	if !errors.Is(err, transcribe.ErrCompileFailed) {
+		// Timeout, cancellation, engine trouble: attribution would repeat the
+		// same infrastructure failure N more times.
+		return err
+	}
+
+	singles, aerr := export.AnswerTeXes(in)
+	if aerr != nil {
+		return err
+	}
+	ge := &gateError{}
+	for _, one := range singles {
+		if one.Status == export.StatusAbsent {
+			continue // no student content; cannot be the cause
+		}
+		ge.total++
+		if ctx.Err() != nil {
+			// Attribution was cut short, but the bundle DEFINITELY does not
+			// compile — report that (with partial attribution if any), never
+			// a "timed out, try again" that misdescribes a deterministic
+			// failure.
+			if len(ge.studentIDs) > 0 {
+				return ge
+			}
+			return err
+		}
+		_, cerr := transcribe.Compile(ctx, s.cfg.TectonicBinPath, cache, one.TeX)
+		if errors.Is(cerr, transcribe.ErrCompileFailed) {
+			ge.studentIDs = append(ge.studentIDs, one.StudentID)
+		} else if cerr != nil {
+			if len(ge.studentIDs) > 0 {
+				return ge
+			}
+			return err
+		}
+	}
+	switch {
+	case len(ge.studentIDs) == 0:
+		// Every standalone compiles but the aggregate does not — an
+		// interaction between bodies the validator did not foresee.
+		return fmt.Errorf("compile gate: bundle fails but every standalone answer compiles: %w", err)
+	case len(ge.studentIDs) == ge.total:
+		// Everyone fails: the fault is the shared preamble (font, package),
+		// not the students — blaming the whole cohort by id is blaming no
+		// one (the missing-CJK-font incident absFontPath records did this).
+		return fmt.Errorf("compile gate: every answer fails standalone — environment fault, not student content: %w", err)
+	}
+	return ge
+}
+
+// typstVerdict is the SECONDARY compile gate (spec 2026-07-30): one
+// best-effort compile of the bundle's _all.typ mirror. It never blocks — a
+// failed mirror ships anyway with its verdict in the manifest header.
+//
+// Only a DETERMINISTIC compile failure may say "failed": a timeout, canceled
+// context, or engine trouble means the mirror was never checked, and calling
+// that "failed" would both lie in the manifest and make the archive bytes
+// depend on scheduler luck (the re-export byte-identity guarantee). Those
+// cases — like no binary at all — return "" (rendered "unverified").
+//
+// "verified" means the mirror parses and typesets; Typst treats a missing
+// font as a warning, not an error, so font resolution is NOT part of the
+// verdict (unlike the tectonic gate, which hard-errors on the CJK font).
+func (s *Server) typstVerdict(ctx context.Context, in export.Input) string {
+	if s.cfg.TypstBinPath == "" {
+		return ""
+	}
+	src, err := export.AllTyp(in)
+	if err != nil {
+		s.log.Warn("typst mirror assembly failed", "problem", in.ProblemNumber, "err", errContentFree(err))
+		return ""
+	}
+	fontDir := ""
+	if s.cfg.ReportFontPath != "" {
+		fontDir = filepath.Dir(absFontPath(s.cfg.ReportFontPath))
+	}
+	if _, err := report.CompileTypstSource(ctx, s.cfg.TypstBinPath, fontDir, src); err != nil {
+		if errors.Is(err, report.ErrTypstCompileFailed) {
+			s.log.Warn("typst mirror compile failed", "problem", in.ProblemNumber, "err", errContentFree(err))
+			return "failed"
+		}
+		s.log.Warn("typst mirror not verified", "problem", in.ProblemNumber, "err", errContentFree(err))
+		return ""
+	}
+	return "verified"
+}
+
+// gateError is a compile-gate failure attributed to the specific answers
+// whose standalone documents fail. Error() carries counts only — it flows
+// into logs, where student ids are PII (CLAUDE.md); studentIDs feeds the HTTP
+// response the professor reads, which names ids the way every other endpoint
+// already does.
+type gateError struct {
+	studentIDs []string
+	total      int
+}
+
+func (e *gateError) Error() string {
+	return fmt.Sprintf("compile gate: %d of %d answers failed standalone compile", len(e.studentIDs), e.total)
+}
+
+func (e *gateError) Unwrap() error { return transcribe.ErrCompileFailed }
+
+// gateFailureMessage is the professor-facing message for a gate failure:
+// attributed when the gate could attribute, honest about timeouts (a timeout
+// is not a compile failure and retrying can succeed), generic otherwise.
+func gateFailureMessage(problem int, err error) string {
+	var ge *gateError
+	switch {
+	case errors.As(err, &ge):
+		return fmt.Sprintf("problem %d: the transcription for student(s) %s failed to compile; the remaining %d answer(s) are fine — not shipping an unverified bundle",
+			problem, strings.Join(ge.studentIDs, ", "), ge.total-len(ge.studentIDs))
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		return fmt.Sprintf("problem %d: the compile gate timed out before verification finished — try again", problem)
+	default:
+		return fmt.Sprintf("problem %d: generated LaTeX failed to compile — not shipping an unverified bundle", problem)
+	}
 }
 
 // errContentFree strips a compile error down to its type for logging: tectonic
@@ -700,6 +837,8 @@ func errContentFree(err error) string {
 		return "tex compile failed"
 	case errors.Is(err, transcribe.ErrNoEngine):
 		return "no engine"
+	case errors.Is(err, report.ErrTypstCompileFailed):
+		return "typst compile failed"
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		return "canceled or timed out"
 	default:

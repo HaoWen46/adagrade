@@ -121,11 +121,23 @@ func ParseResponse(raw []byte) (Doc, string, error) {
 		default:
 			return Doc{}, "", fmt.Errorf("transcribe: block %d has unknown kind %q", i, b.Kind)
 		}
+		// The model sometimes files content in the wrong field (a list's text
+		// in "text", a prose block's sentences split into "items"). Re-file
+		// rather than drop: dropping would silently erase student writing,
+		// which is the one thing this pipeline may never do (2026-07-30 audit).
 		if kind == BlockList && len(b.Items) == 0 {
-			continue // an empty list contributes nothing; dropping it is lossless
+			if b.Text == "" {
+				continue // no content anywhere; dropping is lossless
+			}
+			doc.Blocks = append(doc.Blocks, Block{Kind: BlockProse, Text: b.Text})
+			continue
 		}
 		if kind != BlockList && b.Text == "" {
-			continue // likewise for an empty prose/math/code block
+			if len(b.Items) == 0 {
+				continue // likewise
+			}
+			doc.Blocks = append(doc.Blocks, Block{Kind: BlockList, Items: b.Items})
+			continue
 		}
 		doc.Blocks = append(doc.Blocks, Block{Kind: kind, Text: b.Text, Items: b.Items})
 	}

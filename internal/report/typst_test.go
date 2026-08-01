@@ -2,6 +2,7 @@ package report
 
 import (
 	"bytes"
+	"errors"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -151,5 +152,35 @@ func TestBuildTypst_KillsRunawayMacroExpansion(t *testing.T) {
 func TestBuildTypst_NoBinaryConfigured(t *testing.T) {
 	if _, err := BuildTypst(t.Context(), "", "", typstInput(t)); err == nil {
 		t.Fatal("empty binary path must error, not panic or succeed")
+	}
+}
+
+// --- CompileTypstSource (transcription gate seam, spec 2026-07-30) ---------
+
+// fakeTypstBin mirrors the CLI shape BuildTypst uses: the source path is the
+// second-to-last argument, the output path the last. It fails exactly when
+// the source contains the marker.
+func fakeTypstBin(t *testing.T, marker string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "fake-typst")
+	script := "#!/bin/sh\nprev=\"\"; last=\"\"\nfor a in \"$@\"; do prev=\"$last\"; last=\"$a\"; done\nif grep -q " + marker + " \"$prev\"; then exit 1; fi\nprintf 'PDF' > \"$last\"\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+func TestCompileTypstSource_CompilesAndReportsFailureSentinel(t *testing.T) {
+	bin := fakeTypstBin(t, "TYPFAIL")
+	pdf, err := CompileTypstSource(t.Context(), bin, "", "#heading(level: 2, \"ok\")\n")
+	if err != nil || len(pdf) == 0 {
+		t.Fatalf("clean source must compile, got pdf=%d err=%v", len(pdf), err)
+	}
+	_, err = CompileTypstSource(t.Context(), bin, "", "// TYPFAIL\n")
+	if !errors.Is(err, ErrTypstCompileFailed) {
+		t.Fatalf("a failing compile must wrap ErrTypstCompileFailed, got %v", err)
+	}
+	if err != nil && strings.Contains(err.Error(), "TYPFAIL") {
+		t.Error("compile errors must stay content-free")
 	}
 }

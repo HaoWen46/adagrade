@@ -67,7 +67,7 @@ export function TranscriptionExportCard({ assessmentId }: { assessmentId: string
   });
 
   return (
-    <Card title="LaTeX transcriptions">
+    <Card title="Transcriptions (LaTeX + Typst)">
       {status.isPending && (
         <div className="flex justify-center py-6">
           <Spinner className="size-5" />
@@ -178,7 +178,8 @@ function Ladder({
     <div className="space-y-3">
       <p className="text-xs text-neutral-500">
         Downloads the whole exam, or one problem at a time: each student&apos;s answer as
-        LaTeX source plus the masked page images. The first download transcribes whatever
+        LaTeX source (primary, <code>tex/</code>) with a Typst mirror (<code>typ/</code>)
+        beside it, plus the masked page images. The first download transcribes whatever
         is still pending and can take up to a minute; after that the transcriptions are
         cached, so re-downloading is free and produces the same bytes.
       </p>
@@ -190,6 +191,11 @@ function Ladder({
           {data.verified
             ? "each .tex is compile-checked before it ships"
             : "no compile gate on this server — the manifest marks the .tex unverified"}
+          {/* The mirror's per-build verdict lives in the bundle's manifest;
+              this line only states what the server is configured to do. */}
+          {data.typst
+            ? " · Typst mirror included (best-effort)"
+            : " · Typst mirror included (not compile-checked here)"}
           .
         </p>
       )}

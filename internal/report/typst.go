@@ -3,6 +3,7 @@ package report
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/jpeg" // registers the JPEG decoder for image.DecodeConfig
@@ -69,7 +70,63 @@ func BuildTypst(ctx context.Context, bin, fontDir string, in ReportInput) ([]byt
 	}
 
 	outPath := filepath.Join(dir, "out.pdf")
-	args := []string{"compile", "--root", dir, "--creation-timestamp", "0"}
+	if err := runTypst(ctx, bin, fontDir, dir, docPath, outPath); err != nil {
+		if errors.Is(err, ErrTypstCompileFailed) {
+			return nil, fmt.Errorf("report: typst compile failed (%v) — run typst manually on a sample input to diagnose; stderr is suppressed because it can quote grading comments", err)
+		}
+		return nil, fmt.Errorf("report: %w — likely a pathological LaTeX macro in a comment; falling back to fpdf", err)
+	}
+	pdf, err := os.ReadFile(outPath)
+	if err != nil {
+		return nil, fmt.Errorf("report: read compiled pdf: %w", err)
+	}
+	return pdf, nil
+}
+
+// ErrTypstCompileFailed marks "this source does not compile" as distinct from
+// engine/timeout trouble, so the transcription gate can branch without string
+// matching (the tectonic ErrCompileFailed convention).
+var ErrTypstCompileFailed = errTypstCompileFailed{}
+
+type errTypstCompileFailed struct{}
+
+func (errTypstCompileFailed) Error() string { return "typst compile failed" }
+
+// CompileTypstSource compiles a self-contained .typ source and returns the
+// PDF bytes. Exported for the transcription bundle's secondary gate (spec
+// 2026-07-30): same sandbox, determinism pin, runaway kill, and suppressed
+// stderr as BuildTypst, without the report-specific document assembly.
+func CompileTypstSource(ctx context.Context, bin, fontDir, src string) ([]byte, error) {
+	if bin == "" {
+		return nil, fmt.Errorf("report: CompileTypstSource called with no typst binary configured")
+	}
+	dir, err := os.MkdirTemp("", "adamarker-typst-*")
+	if err != nil {
+		return nil, fmt.Errorf("report: temp dir: %w", err)
+	}
+	defer os.RemoveAll(dir)
+
+	docPath := filepath.Join(dir, "doc.typ")
+	if err := os.WriteFile(docPath, []byte(src), 0o600); err != nil {
+		return nil, fmt.Errorf("report: write doc.typ: %w", err)
+	}
+	outPath := filepath.Join(dir, "out.pdf")
+	if err := runTypst(ctx, bin, fontDir, dir, docPath, outPath); err != nil {
+		return nil, err
+	}
+	pdf, err := os.ReadFile(outPath)
+	if err != nil {
+		return nil, fmt.Errorf("report: read compiled pdf: %w", err)
+	}
+	return pdf, nil
+}
+
+// runTypst invokes the typst binary with the shared hardening: --root
+// sandbox, pinned creation timestamp, hard timeout with SIGKILL, and
+// stdout/stderr dropped (diagnostics quote source lines, which embed user
+// text). A nonzero exit within the deadline wraps ErrTypstCompileFailed.
+func runTypst(ctx context.Context, bin, fontDir, root, docPath, outPath string) error {
+	args := []string{"compile", "--root", root, "--creation-timestamp", "0"}
 	if fontDir != "" {
 		args = append(args, "--font-path", fontDir)
 	}
@@ -78,19 +135,15 @@ func BuildTypst(ctx context.Context, bin, fontDir string, in ReportInput) ([]byt
 	runCtx, cancel := context.WithTimeout(ctx, typstCompileTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, bin, args...)
-	cmd.WaitDelay = 5 * time.Second // SIGKILL then give up if the child ignores cancellation
-	cmd.Stdout, cmd.Stderr = nil, nil // diagnostics can quote comment text — drop them
+	cmd.WaitDelay = 5 * time.Second   // SIGKILL then give up if the child ignores cancellation
+	cmd.Stdout, cmd.Stderr = nil, nil // diagnostics can quote user text — drop them
 	if err := cmd.Run(); err != nil {
 		if runCtx.Err() != nil {
-			return nil, fmt.Errorf("report: typst compile exceeded %s and was killed (%w) — likely a pathological LaTeX macro in a comment; falling back to fpdf", typstCompileTimeout, runCtx.Err())
+			return fmt.Errorf("typst compile exceeded %s and was killed (%w)", typstCompileTimeout, runCtx.Err())
 		}
-		return nil, fmt.Errorf("report: typst compile failed (%v) — run typst manually on a sample input to diagnose; stderr is suppressed because it can quote grading comments", err)
+		return fmt.Errorf("%w: %v (stderr suppressed)", ErrTypstCompileFailed, err)
 	}
-	pdf, err := os.ReadFile(outPath)
-	if err != nil {
-		return nil, fmt.Errorf("report: read compiled pdf: %w", err)
-	}
-	return pdf, nil
+	return nil
 }
 
 // typstDocument generates doc.typ and writes the (quality-processed) page
