@@ -308,6 +308,43 @@ func AllTeX(in Input) (string, error) {
 	return "", fmt.Errorf("export: no _all.tex entry produced")
 }
 
+// AnswerTeX pairs one answer's standalone document with the student id that
+// names it in the archive. Status lets the compile gate skip attribution
+// work that cannot matter (an absent answer carries no student content).
+type AnswerTeX struct {
+	StudentID string
+	TeX       string
+	Status    Status
+}
+
+// AnswerTeXes returns each validated answer's STANDALONE .tex — byte-identical
+// to the tex/{id}.tex entries BuildZIP writes (pinned by test) — in bundle
+// (id-sorted) order. The compile gate uses it to attribute a bundle failure to
+// the specific answer(s) that cannot compile, instead of refusing the whole
+// cohort with an anonymous error (2026-07-30 audit).
+func AnswerTeXes(in Input) ([]AnswerTeX, error) {
+	answers, err := in.validated()
+	if err != nil {
+		return nil, err
+	}
+	preamble := transcribe.Preamble(in.TeX)
+	problemTitle := fmt.Sprintf("Problem %d", in.ProblemNumber)
+	out := make([]AnswerTeX, 0, len(answers))
+	for _, a := range answers {
+		scrubbed, _ := scrubDoc(a.Doc, a.Identity)
+		body, _, err := emitSection(scrubbed, problemTitle, a.Status, in.TeX)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, AnswerTeX{
+			StudentID: a.Identity.StudentID,
+			TeX:       preamble + beginDocument + body + endDocument,
+			Status:    a.Status,
+		})
+	}
+	return out, nil
+}
+
 // entry is one file in the archive, already named and already assembled. The
 // list is built in full before a single byte is compressed so the entry ORDER —
 // the thing determinism depends on — is visible in one place rather than spread
