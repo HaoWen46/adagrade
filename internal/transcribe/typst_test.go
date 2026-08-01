@@ -1,6 +1,7 @@
 package transcribe
 
 import (
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -139,5 +140,19 @@ func TestTypstPreamble_ImportsMitexAndCJKFont(t *testing.T) {
 	whole, _ := EmitTypst(Doc{Blocks: []Block{{Kind: BlockProse, Text: "x"}}})
 	if !strings.HasPrefix(whole, p) {
 		t.Error("EmitTypst must compose as TypstPreamble + body")
+	}
+}
+
+func TestTranscribeMitexVersionMatchesReport(t *testing.T) {
+	// The two Typst paths must not drift in math rendering. report's constant
+	// is unexported, so this pins against its source text — crude, but it
+	// turns a silent drift into a red test.
+	src, err := os.ReadFile("../report/typst.go")
+	if err != nil {
+		t.Fatalf("read report source: %v", err)
+	}
+	want := `const mitexVersion = "` + transcribeMitexVersion + `"`
+	if !strings.Contains(string(src), want) {
+		t.Errorf("transcribeMitexVersion %q no longer matches internal/report's mitexVersion — bump both together", transcribeMitexVersion)
 	}
 }

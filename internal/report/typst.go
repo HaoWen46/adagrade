@@ -74,7 +74,7 @@ func BuildTypst(ctx context.Context, bin, fontDir string, in ReportInput) ([]byt
 		if errors.Is(err, ErrTypstCompileFailed) {
 			return nil, fmt.Errorf("report: typst compile failed (%v) — run typst manually on a sample input to diagnose; stderr is suppressed because it can quote grading comments", err)
 		}
-		return nil, fmt.Errorf("report: %v — likely a pathological LaTeX macro in a comment; falling back to fpdf", err)
+		return nil, fmt.Errorf("report: %w — likely a pathological LaTeX macro in a comment; falling back to fpdf", err)
 	}
 	pdf, err := os.ReadFile(outPath)
 	if err != nil {
@@ -141,7 +141,7 @@ func runTypst(ctx context.Context, bin, fontDir, root, docPath, outPath string) 
 		if runCtx.Err() != nil {
 			return fmt.Errorf("typst compile exceeded %s and was killed (%w)", typstCompileTimeout, runCtx.Err())
 		}
-		return fmt.Errorf("%w: exit status %v (stderr suppressed)", ErrTypstCompileFailed, err)
+		return fmt.Errorf("%w: %v (stderr suppressed)", ErrTypstCompileFailed, err)
 	}
 	return nil
 }

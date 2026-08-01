@@ -12,6 +12,7 @@ import (
 
 	"github.com/HaoWen46/adagrade/internal/imaging"
 	"github.com/HaoWen46/adagrade/internal/regrade"
+	"github.com/HaoWen46/adagrade/internal/report"
 	"github.com/HaoWen46/adagrade/internal/transcribe"
 )
 
@@ -180,5 +181,43 @@ func TestLive_ArchiveExtractsWithSystemUnzip(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		t.Fatalf("extracted tree does not contain the CJK root dir: %v (have %v)", err, names)
+	}
+}
+
+// TestLive_AllTypCompilesWithMitex proves the Typst mirror's central bet
+// (spec 2026-07-30): that mitex covers the math allow-list as students
+// actually exercise it — proof symbols, stacked decorations, matrices,
+// cases, CJK in \text — so a verdict of "verified" means a PDF, not luck.
+// Opt-in like every live test: skipped without a typst binary.
+func TestLive_AllTypCompilesWithMitex(t *testing.T) {
+	bin := os.Getenv("ADAMARKER_TYPST_BIN")
+	if bin == "" {
+		var err error
+		if bin, err = exec.LookPath("typst"); err != nil {
+			t.Skip("typst not installed; skipping live mirror compile test")
+		}
+	}
+
+	in := sampleInput(t)
+	in.Answers[0].Doc.Blocks = append(in.Answers[0].Doc.Blocks,
+		transcribe.Block{Kind: transcribe.BlockMath, Text: `x > 1 \therefore x^2 > x \quad \because x \nmid 0`},
+		transcribe.Block{Kind: transcribe.BlockMath, Text: `\overset{\text{def}}{=} \underset{x \to 0}{\lim} f(x)`},
+		transcribe.Block{Kind: transcribe.BlockMath, Text: `\begin{pmatrix} a & b \\ c & d \end{pmatrix} \begin{cases} 1 & \text{if 偶數} \\ 0 & \text{else} \end{cases}`},
+		transcribe.Block{Kind: transcribe.BlockProse, Text: `因此 $O(n \log n)$ 成立。`},
+		transcribe.Block{Kind: transcribe.BlockMath, Text: `\text{[a] and @x} + \operatorname{argmax} + \mathrm{a(b)c}`},
+	)
+	typ, err := AllTyp(in)
+	if err != nil {
+		t.Fatalf("AllTyp: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	pdf, err := report.CompileTypstSource(ctx, bin, "", typ)
+	if err != nil {
+		t.Fatalf("_all.typ must compile with mitex (allow-list coverage gap?): %v", err)
+	}
+	if !bytes.HasPrefix(pdf, []byte("%PDF")) {
+		t.Fatalf("output is not a PDF (first bytes %q)", pdf[:min(8, len(pdf))])
 	}
 }

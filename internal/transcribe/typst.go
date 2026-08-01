@@ -16,6 +16,14 @@ import (
 // passed the LaTeX allow-list (ValidateMath*), which is what makes handing
 // them to mitex safe.
 //
+// TRUST BOUNDARY: inside a validated math string, argument text of
+// \text{…}/\operatorname{…} and friends is arbitrary printable ASCII (the
+// allow-list rejects the TeX hazards # $ % & and unknown commands, but not
+// e.g. `@` or brackets). mitex converts and evaluates that content on the
+// Typst side, so its escaping is load-bearing there — a mitex conversion
+// bug fails the MIRROR's compile (caught by the secondary gate), never the
+// primary .tex. The live test exercises these shapes against real mitex.
+//
 // FLAG PARITY INVARIANT: EmitTypstBody branches on the SAME validator
 // verdicts as EmitBody and emits the SAME flag strings on the same inputs,
 // so the manifest's one flags column stays truthful for both formats
@@ -196,9 +204,12 @@ func quotedTypstMarkup(s string) string {
 
 // escapeTypstString escapes a value for a double-quoted Typst string
 // literal: backslash and quote are the only metacharacters; newlines become
-// \n so multi-line content stays one token. Duplicated from
-// internal/report/typstmarkup.go (12 lines) rather than exporting it across
-// an unrelated seam — keep the two in sync.
+// \n so multi-line content stays one token. Same contract as
+// internal/report/typstmarkup.go's, duplicated rather than exported across
+// an unrelated seam. One deliberate difference: this rune loop rewrites
+// invalid UTF-8 to U+FFFD (deterministically), where report's Replacer
+// passes such bytes through — harmless here because every Doc arrives via
+// encoding/json, which has already substituted U+FFFD.
 func escapeTypstString(s string) string {
 	var b strings.Builder
 	b.Grow(len(s) + 8)

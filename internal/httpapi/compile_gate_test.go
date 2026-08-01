@@ -190,4 +190,15 @@ func TestTypstVerdict_BestEffortNeverBlocks(t *testing.T) {
 	if got := s.typstVerdict(context.Background(), in); got != "" {
 		t.Errorf("unconfigured mirror must report empty verdict, got %q", got)
 	}
+
+	// A canceled context (deadline spent, engine killed) means the mirror was
+	// never CHECKED — "failed" would be untruthful and would make the archive
+	// bytes depend on scheduler luck. Only a deterministic compile failure
+	// may say failed; everything else is "" (unverified).
+	s = &Server{cfg: config.Config{TypstBinPath: fakeTypst(t, "NEVERPRESENT")}, log: discardLogger()}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := s.typstVerdict(canceled, in); got != "" {
+		t.Errorf("an unchecked mirror must report unverified, got %q", got)
+	}
 }

@@ -109,3 +109,17 @@ func TestManifest_RecordsTypstVerdict(t *testing.T) {
 		}
 	}
 }
+
+func TestValidated_RejectsForgedTypstVerdict(t *testing.T) {
+	// TypstVerdict is interpolated into the manifest ahead of the CSV header;
+	// an unvalidated value with a newline could forge a manifest record.
+	in := sampleInput(t)
+	in.TypstVerdict = "failed\nb09901002,Student 001,1,ok,dedicated,1.0,"
+	if _, err := BuildZIP(in); err == nil {
+		t.Fatal("a verdict outside the closed set must refuse the build")
+	}
+	in.TypstVerdict = "verified"
+	if _, err := BuildZIP(in); err != nil {
+		t.Fatalf("a legal verdict must build, got %v", err)
+	}
+}

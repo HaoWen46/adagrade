@@ -463,12 +463,17 @@ func (s *Server) handleExamTranscriptionZIP(w http.ResponseWriter, r *http.Reque
 		apiError(w, http.StatusBadRequest, "no answers for this assessment")
 		return
 	}
-	for i, in := range out.Problems {
+	// Blocking gates first, best-effort mirror second: interleaving would let
+	// mirror compiles eat the request budget before a later problem's BLOCKING
+	// gate runs, converting an attributable refusal into a timeout.
+	for _, in := range out.Problems {
 		if err := s.verifyProblemTeX(r.Context(), in); err != nil {
 			s.log.Error("transcription compile gate failed", "assessment_id", aid, "problem", in.ProblemNumber, "err", errContentFree(err))
 			apiError(w, http.StatusInternalServerError, gateFailureMessage(in.ProblemNumber, err))
 			return
 		}
+	}
+	for i, in := range out.Problems {
 		out.Problems[i].TypstVerdict = s.typstVerdict(r.Context(), in)
 	}
 
@@ -754,8 +759,17 @@ func (s *Server) verifyProblemTeX(ctx context.Context, in export.Input) error {
 
 // typstVerdict is the SECONDARY compile gate (spec 2026-07-30): one
 // best-effort compile of the bundle's _all.typ mirror. It never blocks — a
-// failed mirror ships anyway with its verdict in the manifest header. ""
-// means no Typst binary is configured (rendered "unverified").
+// failed mirror ships anyway with its verdict in the manifest header.
+//
+// Only a DETERMINISTIC compile failure may say "failed": a timeout, canceled
+// context, or engine trouble means the mirror was never checked, and calling
+// that "failed" would both lie in the manifest and make the archive bytes
+// depend on scheduler luck (the re-export byte-identity guarantee). Those
+// cases — like no binary at all — return "" (rendered "unverified").
+//
+// "verified" means the mirror parses and typesets; Typst treats a missing
+// font as a warning, not an error, so font resolution is NOT part of the
+// verdict (unlike the tectonic gate, which hard-errors on the CJK font).
 func (s *Server) typstVerdict(ctx context.Context, in export.Input) string {
 	if s.cfg.TypstBinPath == "" {
 		return ""
@@ -763,17 +777,19 @@ func (s *Server) typstVerdict(ctx context.Context, in export.Input) string {
 	src, err := export.AllTyp(in)
 	if err != nil {
 		s.log.Warn("typst mirror assembly failed", "problem", in.ProblemNumber, "err", errContentFree(err))
-		return "failed"
+		return ""
 	}
 	fontDir := ""
 	if s.cfg.ReportFontPath != "" {
 		fontDir = filepath.Dir(absFontPath(s.cfg.ReportFontPath))
 	}
 	if _, err := report.CompileTypstSource(ctx, s.cfg.TypstBinPath, fontDir, src); err != nil {
-		// Compile error, timeout, engine trouble — all just "failed": the
-		// mirror is best-effort and the log stays content-free.
-		s.log.Warn("typst mirror compile failed", "problem", in.ProblemNumber, "err", errContentFree(err))
-		return "failed"
+		if errors.Is(err, report.ErrTypstCompileFailed) {
+			s.log.Warn("typst mirror compile failed", "problem", in.ProblemNumber, "err", errContentFree(err))
+			return "failed"
+		}
+		s.log.Warn("typst mirror not verified", "problem", in.ProblemNumber, "err", errContentFree(err))
+		return ""
 	}
 	return "verified"
 }
@@ -821,6 +837,8 @@ func errContentFree(err error) string {
 		return "tex compile failed"
 	case errors.Is(err, transcribe.ErrNoEngine):
 		return "no engine"
+	case errors.Is(err, report.ErrTypstCompileFailed):
+		return "typst compile failed"
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		return "canceled or timed out"
 	default:

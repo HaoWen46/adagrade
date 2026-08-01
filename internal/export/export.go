@@ -189,7 +189,8 @@ var manifestColumns = []string{"student_id", "pseudonym", "pages", "status", "so
 // purpose: the warning has to travel with the file, because the file is the
 // one artifact in the bundle that must not be uploaded.
 const manifestNotice = "# ADA-Marker transcription export — LOCAL DECODER RING, do not upload this file.\n" +
-	"# It maps pseudonyms back to student ids; _all.tex is the upload-safe artifact.\n"
+	"# It maps pseudonyms back to student ids; _all.tex (authoritative) and its\n" +
+	"# _all.typ mirror are the upload-safe artifacts.\n"
 
 // BuildZIP packages the answers into the spec §3 bundle:
 //
@@ -536,6 +537,13 @@ func (in Input) validated() ([]Answer, error) {
 	}
 	if len(in.Answers) == 0 {
 		return nil, fmt.Errorf("export: no answers to export")
+	}
+	switch in.TypstVerdict {
+	case "", "verified", "failed":
+	default:
+		// The verdict is interpolated into the manifest ahead of the CSV
+		// header; anything outside the closed set could forge a record.
+		return nil, fmt.Errorf("export: typst verdict %q is not one of \"\"|verified|failed", in.TypstVerdict)
 	}
 
 	seen := make(map[string]int, len(in.Answers))
