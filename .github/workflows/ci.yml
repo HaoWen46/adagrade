@@ -54,8 +54,11 @@ jobs:
       # integration tests (internal/store/storetest, etc.) actually execute here
       # rather than self-skipping — the test harness itself drops/recreates the
       # schema and runs migrations against the service container per test package.
+      # -timeout 20m: the httpapi integration suite legitimately runs close to
+      # go test's 10m default per-package timeout on slow shared runners (first
+      # hit 2026-08-04, a docs-only push); 20m is headroom, not license to grow.
       - name: go test
-        run: go test ./... -count=1
+        run: go test ./... -count=1 -timeout 20m
 
       # Proves the DEPLOYMENT build path on linux/x86_64 — go test compiles test
       # binaries, but only `go build ./cmd/adamarker` exercises the exact final
