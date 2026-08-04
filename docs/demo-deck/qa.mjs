@@ -3,15 +3,17 @@ import puppeteer from "puppeteer-core";
 import { readFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
-const envFile = readFileSync("/Users/haowenchen/Files/projects/ADA-Marker/.env", "utf8");
-const KEY = envFile.match(/^OPENROUTER_API_KEY=(.+)$/m)?.[1]?.trim();
-const BASE = (envFile.match(/^OPENROUTER_BASE_URL=(.+)$/m)?.[1]?.trim() ?? "https://openrouter.ai/api/v1");
-if (!KEY) throw new Error("no OPENROUTER_API_KEY in .env");
+// Reads the repo-root .env (two levels up from docs/demo-deck/); env vars win if set.
+const envPath = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "..", ".env");
+const envFile = (() => { try { return readFileSync(envPath, "utf8"); } catch { return ""; } })();
+const KEY = process.env.OPENROUTER_API_KEY ?? envFile.match(/^OPENROUTER_API_KEY=(.+)$/m)?.[1]?.trim();
+const BASE = process.env.OPENROUTER_BASE_URL ?? envFile.match(/^OPENROUTER_BASE_URL=(.+)$/m)?.[1]?.trim() ?? "https://openrouter.ai/api/v1";
+if (!KEY) throw new Error(`no OPENROUTER_API_KEY in env or ${envPath}`);
 const MODEL = "google/gemini-3.1-flash-lite";
 
 mkdirSync("qa-slides", { recursive: true });
 const browser = await puppeteer.launch({
-  executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  executablePath: process.env.CHROME_BIN ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   headless: "new",
 });
 const page = await browser.newPage();
