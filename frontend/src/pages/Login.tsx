@@ -152,6 +152,9 @@ export function Login() {
             <p className="text-xs font-medium tracking-wide text-neutral-400 uppercase">
               Dev login
             </p>
+            <p className="text-xs text-neutral-500">
+              Use the bootstrap admin email configured in <code>.env</code>.
+            </p>
             <Input type="email" required autoComplete="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
             <Button
               type="submit"

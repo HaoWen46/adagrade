@@ -8,6 +8,17 @@ doctor:
 DEV_DB_URL  ?= postgres://adamarker:adamarker@localhost:5433/adamarker?sslmode=disable
 TEST_DB_URL ?= postgres://adamarker:adamarker@localhost:5434/adamarker_test?sslmode=disable
 
+# Keep Go's writable build and module caches in the repository. This makes all
+# Make targets work in sandboxed environments where the usual user-level Go
+# caches are read-only. Callers may still override either variable if needed.
+GOCACHE    ?= $(CURDIR)/.cache/go-build
+GOMODCACHE ?= $(CURDIR)/.cache/go-mod
+# Keep Buildx state alongside the Go caches without hiding the user's Docker
+# config, which may provide the Compose plugin and selected Docker context.
+BUILDX_CONFIG ?= $(CURDIR)/.cache/buildx
+
+export GOCACHE GOMODCACHE BUILDX_CONFIG
+
 # Vite builds into internal/web/assets/dist (gitignored); go:embed picks it up when
 # present, else the committed placeholder serves (docs/DECISIONS.md D9).
 frontend:

@@ -35,6 +35,48 @@ const KIND_LABELS: Record<IDRegionKind, string> = {
 
 const KIND_ORDER: IDRegionKind[] = ["student_id", "name", "problem_id"];
 
+interface LocalTemplate {
+  name: string;
+  url: string;
+  isPDF: boolean;
+}
+
+const templateMaxLongEdge = 1800;
+
+async function renderFirstPDFPage(file: File): Promise<string> {
+  // Load PDF.js only when the lecturer actually selects a PDF. Its worker is
+  // bundled with the app; the selected file never leaves the browser.
+  const [{ getDocument, GlobalWorkerOptions }, { default: pdfWorkerURL }] = await Promise.all([
+    import("pdfjs-dist"),
+    import("pdfjs-dist/build/pdf.worker.mjs?url"),
+  ]);
+  GlobalWorkerOptions.workerSrc = pdfWorkerURL;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const task = getDocument({ data: bytes });
+  const pdf = await task.promise;
+  try {
+    const page = await pdf.getPage(1);
+    const naturalViewport = page.getViewport({ scale: 1 });
+    const scale = Math.min(
+      2,
+      templateMaxLongEdge / Math.max(naturalViewport.width, naturalViewport.height),
+    );
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("canvas unavailable");
+    await page.render({ canvasContext: context, viewport }).promise;
+
+    const image = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+    if (!image) throw new Error("PDF page could not be rendered");
+    return URL.createObjectURL(image);
+  } finally {
+    await pdf.destroy();
+  }
+}
+
 /** Region fill: the region's hex color at ~40% alpha (fallback for odd input). */
 function fillColor(color: string): string {
   return /^#[0-9a-fA-F]{6}$/.test(color) ? `${color}66` : "rgba(74,74,74,0.4)";
@@ -51,25 +93,48 @@ export function IDRegionCard({ assessmentId }: { assessmentId: string }) {
   // LOCAL-ONLY template image: never uploaded or fetched anywhere. The object URL
   // lives only in this tab and is revoked on replacement/unmount so the browser
   // doesn't keep a PII-bearing blob alive longer than necessary.
-  const [localImage, setLocalImage] = useState<{ file: File; url: string } | null>(null);
+  const [localTemplate, setLocalTemplate] = useState<LocalTemplate | null>(null);
+  const [templateError, setTemplateError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const templateRequest = useRef(0);
 
-  // Single revocation mechanism: this cleanup runs both when localImage changes
+  // Single revocation mechanism: this cleanup runs both when localTemplate changes
   // (React tears down the previous effect instance before the next one, revoking the
   // outgoing URL on replacement) and when the component unmounts (revoking whatever
   // URL is current). No other code path revokes — the file itself never leaves the
   // browser, only its object URL's lifetime is being managed here.
   useEffect(() => {
     return () => {
-      if (localImage) URL.revokeObjectURL(localImage.url);
+      if (localTemplate) URL.revokeObjectURL(localTemplate.url);
     };
-  }, [localImage]);
+  }, [localTemplate]);
 
-  const onPickLocalImage = (f: File | null) => {
-    setLocalImage(f ? { file: f, url: URL.createObjectURL(f) } : null);
+  const onPickLocalTemplate = async (file: File | null) => {
+    const request = ++templateRequest.current;
+    setTemplateError(null);
+    if (!file) {
+      setLocalTemplate(null);
+      return;
+    }
+
+    const isPDF = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+    try {
+      const url = isPDF ? await renderFirstPDFPage(file) : URL.createObjectURL(file);
+      // Selecting another file while a PDF is rendering must not replace the
+      // newer choice. Revoke the now-unused local page immediately.
+      if (request !== templateRequest.current) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      setLocalTemplate({ name: file.name, url, isPDF });
+    } catch {
+      if (request === templateRequest.current) {
+        setTemplateError("Couldn’t open that PDF. Please choose a readable PDF or image.");
+      }
+    }
   };
 
-  const templateUrl = localImage?.url ?? sample.pageUrl;
+  const templateUrl = localTemplate?.url ?? sample.pageUrl;
 
   // Local draft, backed by sessionStorage (HCI finding C): the Identify tab is
   // rendered conditionally by AssessmentDetail, so switching tabs unmounts this card
@@ -130,7 +195,7 @@ export function IDRegionCard({ assessmentId }: { assessmentId: string }) {
     },
   });
 
-  const pending = regionsQuery.isPending || (localImage === null && sample.pending);
+  const pending = regionsQuery.isPending || (localTemplate === null && sample.pending);
 
   return (
     <Card title="ID regions">
@@ -150,26 +215,32 @@ export function IDRegionCard({ assessmentId }: { assessmentId: string }) {
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
+              accept="image/*,application/pdf,.pdf"
               className="hidden"
-              aria-label="Choose a local template image"
-              onChange={(e) => onPickLocalImage(e.target.files?.[0] ?? null)}
+              aria-label="Choose a local template image or PDF"
+              onChange={(e) => {
+                void onPickLocalTemplate(e.target.files?.[0] ?? null);
+                // Allow selecting the same file again after a rendering error.
+                e.target.value = "";
+              }}
             />
             <Button
               variant="secondary"
               className="px-2.5 py-1 text-xs"
               onClick={() => fileInputRef.current?.click()}
             >
-              {localImage ? "Replace template image" : "Pick template image"}
+              {localTemplate ? "Replace template" : "Pick template image or PDF"}
             </Button>
-            {localImage && (
+            {localTemplate && (
               <>
-                <span className="truncate text-xs text-neutral-500">{localImage.file.name}</span>
+                <span className="truncate text-xs text-neutral-500">
+                  {localTemplate.name}{localTemplate.isPDF ? " · page 1" : ""}
+                </span>
                 <Button
                   variant="ghost"
                   className="px-2 py-1 text-xs"
                   onClick={() => {
-                    onPickLocalImage(null);
+                    void onPickLocalTemplate(null);
                     if (fileInputRef.current) fileInputRef.current.value = "";
                   }}
                 >
@@ -179,13 +250,14 @@ export function IDRegionCard({ assessmentId }: { assessmentId: string }) {
             )}
           </div>
           <p className="text-[11px] text-neutral-400">
-            This image stays on your device — it is only shown here to help you draw the boxes
-            and is never uploaded or sent anywhere.
+            Choose a JPG, PNG, or PDF. For PDFs, only the first page is shown. The file stays on
+            your device — it is never uploaded or sent anywhere.
           </p>
+          {templateError && <p className="text-xs text-red-600">{templateError}</p>}
 
           {templateUrl === undefined ? (
             <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-amber-200 ring-inset">
-              Pick any scanned page as a template — it stays on your device.
+              Pick any scanned image or PDF as a template — it stays on your device.
             </p>
           ) : (
             <>
