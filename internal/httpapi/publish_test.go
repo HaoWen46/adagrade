@@ -686,17 +686,24 @@ func TestPublish_CoverageLostUnderLock_409GradingStateChanged(t *testing.T) {
 
 	// Wait until the publish transaction is provably parked on our lock (its
 	// unlocked pre-reads are then complete — the exact race window), then commit.
-	// Advisory waiters are excluded: storetest.Fresh serializes DB tests
-	// cluster-wide via pg_advisory_lock, so under a multi-package DB run sibling
-	// test binaries sit parked as ungranted ADVISORY locks the whole time — an
-	// unfiltered EXISTS would fire before the publish goroutine even started,
-	// and the early commit would flip the preview itself to blocked (a coverage
-	// 409, not the under-lock race this test exists to pin).
+	// pg_locks is cluster-wide, and sibling test binaries now run concurrently in
+	// their own per-test databases (storetest.DSN) — scope to waiters whose
+	// backend is connected to THIS database so a transient lock wait elsewhere
+	// can't fire the EXISTS before the publish goroutine even parks (an early
+	// commit would flip the preview itself to blocked: a coverage 409, not the
+	// under-lock race this test exists to pin). The join goes through
+	// pg_stat_activity because a row-lock wait surfaces as a transactionid lock
+	// whose pg_locks.database is NULL. Advisory waiters stay excluded too.
 	deadline := time.Now().Add(15 * time.Second)
 	for {
 		var waiting bool
 		if err := f.st.Pool.QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM pg_locks WHERE NOT granted AND locktype <> 'advisory')`).Scan(&waiting); err != nil {
+			`SELECT EXISTS (
+				SELECT 1 FROM pg_locks l
+				JOIN pg_stat_activity a ON a.pid = l.pid
+				WHERE NOT l.granted AND l.locktype <> 'advisory'
+				  AND a.datname = current_database()
+			)`).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting {

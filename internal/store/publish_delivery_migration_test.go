@@ -153,21 +153,9 @@ func TestMigration0036_FreshDatabaseHasNoRiverJobTable(t *testing.T) {
 	}
 	t.Cleanup(s.Close)
 
-	// Same cross-package serialization storetest.Fresh uses: this test drops
-	// the schema the whole test database shares.
-	lock, err := s.Pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire lock conn: %v", err)
-	}
-	if _, err := lock.Exec(ctx, "SELECT pg_advisory_lock(hashtext('adamarker-test-db'))"); err != nil {
-		lock.Release()
-		t.Fatalf("advisory lock: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = lock.Exec(context.Background(), "SELECT pg_advisory_unlock(hashtext('adamarker-test-db'))")
-		lock.Release()
-	})
-
+	// The per-test database is cloned from the fully-migrated template; drop its
+	// schema so goose runs from zero (no lock needed — the database is private
+	// to this test).
 	if _, err := s.Pool.Exec(ctx, "DROP SCHEMA public CASCADE; CREATE SCHEMA public"); err != nil {
 		t.Fatalf("reset schema: %v", err)
 	}

@@ -1,6 +1,7 @@
 # Dev/test Postgres for ADA-Marker. Ports 5433/5434 avoid clashing with any host
-# Postgres. `db-test` keeps its data on tmpfs so integration tests start clean-ish
-# (the test harness still drops/recreates schemas itself).
+# Postgres. `db-test` keeps its data on tmpfs: fast, and a container restart wipes
+# the per-test databases the harness clones from its migrated template
+# (internal/store/storetest).
 services:
   db:
     image: postgres:16-alpine
