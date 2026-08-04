@@ -4,6 +4,10 @@
 set -e
 cd "$(dirname "$0")/.."
 set -a; [ -f .env ] && . ./.env; set +a
+# Bring up the compose dev DB like `make dev` does, so a cold launch doesn't
+# hang on a missing Postgres. Warning-only: an external ADAMARKER_DATABASE_URL
+# (or no Docker) must not block the launch.
+docker compose up -d --wait db || echo "dev-e2e: warning: could not start the compose db — assuming ADAMARKER_DATABASE_URL points at a reachable Postgres." >&2
 export ADAMARKER_DATABASE_URL="${ADAMARKER_DATABASE_URL:-postgres://adamarker:adamarker@localhost:5433/adamarker?sslmode=disable}"
 export ADAMARKER_DEV_LOGIN=1
 export ADAMARKER_BOOTSTRAP_ADMIN_EMAIL="${ADAMARKER_BOOTSTRAP_ADMIN_EMAIL:-b11902156@ntu.edu.tw}"

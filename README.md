@@ -95,27 +95,46 @@ and cost-per-run subset shipped tonight — cross-exam comparisons stay open).
 
 ## Develop
 
+Agents (Claude Code etc.): follow [`AGENTS.md`](AGENTS.md) instead — same facts, condensed.
+
 Requires:
 
 - **Go 1.26+** (per `go.mod`)
-- **Docker** for dev/test Postgres, unless you provide Postgres yourself
+- **Docker** (daemon running) for dev/test Postgres, unless you provide Postgres yourself
 - **Node 20+** with npm for the frontend build
 - a C compiler for cgo packages
 
-```sh
-make dev            # Postgres (compose) + server on :8080 with dev login enabled
-make test           # unit tests (no Postgres needed)
-make test-integration  # spins up the test DB and runs everything
-make frontend       # vite build -> embedded into the binary
-make build          # -> bin/adamarker
-make db-dump        # blobs tarball + pg_dump into backups/ (order per DECISIONS D15)
+### Quick start
+
+1. `make frontend` — build the SPA once (skippable, but without it the server serves a placeholder page).
+2. Set the first admin: put `ADAMARKER_BOOTSTRAP_ADMIN_EMAIL=you@ntu.edu.tw` in `.env` (created on first login; only needed on an empty database).
+3. `make dev` — starts the compose Postgres (:5433), runs migrations automatically, serves http://localhost:8080 with dev login enabled.
+4. Open http://localhost:8080 and log in with the bootstrap admin email (the login page posts to `POST /auth/dev-login`; 403 `not authorized` means the email isn't an allowlisted user).
+
+Scripting the API (curl, agents): every non-GET request needs the `X-ADA-CSRF: 1` header (any value), including dev-login:
+
+```bash
+curl -X POST localhost:8080/auth/dev-login -H 'Content-Type: application/json' -H 'X-ADA-CSRF: 1' -d '{"email":"you@ntu.edu.tw"}' -c cookies.txt
 ```
 
-Dev login: `make dev` enables `POST /auth/dev-login` (development-only, double-gated);
-set `ADAMARKER_BOOTSTRAP_ADMIN_EMAIL=you@ntu.edu.tw` once so the first login works, or
-rely on `.env`. Production login can be email magic links via `ADAMARKER_EMAIL_PROVIDER`
-plus `ADAMARKER_APP_BASE_URL`, with optional Google OAuth if configured. Vite dev server:
-`cd frontend && npm run dev` (proxies to :8080).
+Alternative entry point: `./scripts/dev-e2e.sh` (what `.claude/launch.json` runs) — same thing on **:8899**, rebuilds the binary first and defaults the bootstrap admin + regrade-webhook dev vars itself.
+
+### Everything else
+
+```sh
+make test              # unit tests (no Postgres needed)
+make vet               # go vet
+make test-integration  # spins up the test DB (:5434) and runs everything
+make frontend          # vite build -> embedded into the binary
+make build             # -> bin/adamarker
+make db-dump           # blobs tarball + pg_dump into backups/ (order per DECISIONS D15)
+make demo-data         # regenerate committed data/demo/ fixtures (deterministic)
+make demo-walkthrough  # seed a completed demo exam into a RUNNING :8899 server
+```
+
+Optional features are off until their env vars are set — local OCR (`make ocr-models`), result-PDF attachments (`make report-fonts`), Typst math rendering (`ADAMARKER_TYPST_BIN`); each make target prints the env vars to set.
+
+Production login is email magic links via `ADAMARKER_EMAIL_PROVIDER` plus `ADAMARKER_APP_BASE_URL`, with optional Google OAuth if configured. Vite dev server for frontend iteration: `cd frontend && npm run dev` (proxies to :8080).
 
 Config is env-driven — see [`.env.adamarker.example`](.env.adamarker.example). **Vision
 providers are managed on the app's Providers page** (base URL, models, rate limits, API
