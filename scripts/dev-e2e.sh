@@ -31,4 +31,5 @@ if [ ! -d internal/web/assets/dist ]; then
   echo "dev-e2e: warning: internal/web/assets/dist missing — the embedded SPA placeholder will be served; run 'make frontend' first." >&2
 fi
 go build -o bin/adamarker ./cmd/adamarker
+echo "dev-e2e: http://localhost:8899 — dev login email: $ADAMARKER_BOOTSTRAP_ADMIN_EMAIL (POST /auth/dev-login, header 'X-ADA-CSRF: 1', JSON {\"email\":...}; every non-GET API call needs that header)" >&2
 exec ./bin/adamarker

@@ -6,9 +6,11 @@ AI-assisted grading system, one Go binary + Postgres. Product plan: [`ADA-Marker
 
 ## Start the server
 
-- Prereqs: Go 1.26+, Docker daemon running (dev Postgres), a C compiler (cgo); Node 20+ only when rebuilding the SPA.
-- Preferred (agents): launch the `adamarker-e2e` config from [`.claude/launch.json`](.claude/launch.json) — it runs [`scripts/dev-e2e.sh`](scripts/dev-e2e.sh), which starts the compose Postgres, rebuilds the binary, and serves http://localhost:8899 with dev login enabled.
-- Manual alternative: `make dev` — starts compose Postgres (:5433) and serves http://localhost:8080 with dev login enabled.
+- First command, always: `make doctor` — checks every prerequisite (Go 1.26+, C compiler, Docker or an external `ADAMARKER_DATABASE_URL`, built SPA, bootstrap admin email) and prints the exact fix for anything missing; re-run it after fixing until it says ready.
+- Brand-new machine with nothing installed: follow [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md) — per-OS copy-paste commands from zero, with the few password/GUI steps an agent must hand to the human tagged HUMAN, and a no-Docker local-Postgres path agents can run end-to-end.
+- Start it: `./scripts/dev-e2e.sh` → http://localhost:8899, or `make dev` → http://localhost:8080; both start the compose Postgres themselves, rebuild, and enable dev login; dev-e2e.sh additionally defaults the bootstrap admin email and prints the exact login call at startup.
+- Claude Code only: the `adamarker-e2e` config in [`.claude/launch.json`](.claude/launch.json) wraps `scripts/dev-e2e.sh`; other agents run the script directly.
+- No Docker available? Set `ADAMARKER_DATABASE_URL` (in `.env`) to any reachable Postgres 16+ database and use `./scripts/dev-e2e.sh` (its compose step degrades to a warning; `make dev` still hard-requires Docker).
 - If `docker` commands report "Docker Desktop is manually paused", resume it first (`docker desktop start`, or `docker desktop restart` if the pause persists) — a paused daemon makes the app hang waiting for Postgres and then exit.
 - Migrations run automatically at startup; never run goose or psql schema commands by hand.
 - CSRF: every non-GET API request MUST send the header `X-ADA-CSRF: 1` (any value works) or it fails 403 `missing CSRF header`; this includes `/auth/dev-login`.

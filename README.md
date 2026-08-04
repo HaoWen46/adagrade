@@ -104,8 +104,11 @@ Requires:
 - **Node 20+** with npm for the frontend build
 - a C compiler for cgo packages
 
+Starting from a machine with none of that installed? [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md) is the from-zero playbook (macOS / Ubuntu / WSL2, Docker and no-Docker paths, agent-runnable).
+
 ### Quick start
 
+0. `make doctor` — preflight; tells you exactly what's missing and how to fix it. Re-run until it says ready.
 1. `make frontend` — build the SPA once (skippable, but without it the server serves a placeholder page).
 2. Set the first admin: put `ADAMARKER_BOOTSTRAP_ADMIN_EMAIL=you@ntu.edu.tw` in `.env` (created on first login; only needed on an empty database).
 3. `make dev` — starts the compose Postgres (:5433), runs migrations automatically, serves http://localhost:8080 with dev login enabled.
@@ -117,7 +120,7 @@ Scripting the API (curl, agents): every non-GET request needs the `X-ADA-CSRF: 1
 curl -X POST localhost:8080/auth/dev-login -H 'Content-Type: application/json' -H 'X-ADA-CSRF: 1' -d '{"email":"you@ntu.edu.tw"}' -c cookies.txt
 ```
 
-Alternative entry point: `./scripts/dev-e2e.sh` (what `.claude/launch.json` runs) — same thing on **:8899**, rebuilds the binary first and defaults the bootstrap admin + regrade-webhook dev vars itself.
+Alternative entry point: `./scripts/dev-e2e.sh` (what `.claude/launch.json` runs) — same thing on **:8899**, rebuilds the binary first, defaults the bootstrap admin + regrade-webhook dev vars itself, and prints the exact login call at startup. No Docker? Point `ADAMARKER_DATABASE_URL` (in `.env`) at any reachable Postgres 16+ and use this script — its compose step is warning-only.
 
 ### Everything else
 

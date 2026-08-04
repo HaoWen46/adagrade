@@ -1,4 +1,9 @@
-.PHONY: build test vet run tidy frontend dev db-up db-test-up db-down test-integration sqlc db-dump ocr-models report-fonts
+.PHONY: build test vet run tidy frontend dev db-up db-test-up db-down test-integration sqlc db-dump ocr-models report-fonts doctor
+
+# Preflight: checks Go/cgo/Docker-or-DATABASE_URL/frontend/bootstrap-admin and
+# prints the exact fix for anything missing. Run this first when setup fails.
+doctor:
+	@sh scripts/doctor.sh
 
 DEV_DB_URL  ?= postgres://adamarker:adamarker@localhost:5433/adamarker?sslmode=disable
 TEST_DB_URL ?= postgres://adamarker:adamarker@localhost:5434/adamarker_test?sslmode=disable
