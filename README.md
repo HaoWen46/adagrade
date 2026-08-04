@@ -1,11 +1,15 @@
 # AdaGrade
 
+
 AI-assisted grading for handwritten university exams & assignments — the successor to the
 course's *Ada Judge* autograder. Formerly developed as *ADA-Marker*; older docs and design
 records use that name. A single self-hosted Go binary that ingests handwritten
 PDFs, grades them per-rubric-criterion with vision LLMs (against a masked copy that hides
 student identity), keeps full grading history, supports human review/override, and handles
 grade distribution + regrades entirely over email.
+
+## quick start
+quick start: [交付與使用說明（LaTeX 存取版）](docs/DELIVERY.md)
 
 ## Start Here
 

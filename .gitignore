@@ -1,6 +1,7 @@
 # Binaries
 /adamarker
 /bin/
+/.cache/
 
 # Runtime data (local-disk blob store, DBs)
 /data/*
