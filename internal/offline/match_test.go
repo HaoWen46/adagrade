@@ -691,10 +691,16 @@ func TestMatchPages_LegibleWrongIDVetoesTheAssignment(t *testing.T) {
 			why:        "the value line agrees with the assignment; the label is not evidence against it",
 		},
 		{
-			name:       "digit-bearing label beside an agreeing value",
-			idLines:    lines(labelLine("FORM 2024 ABC", 0.99), textLine(t, "B11902001", 0.95)),
+			// The clause under test is ALL qualifying readings must disagree, so
+			// this label has to actually qualify: "FORM2024" is 8 runes with a
+			// digit and 8 edits from B11902001. Spelled "FORM 2024" it would
+			// split into two sub-5-rune runs, never qualify, and the case would
+			// silently degenerate into a duplicate of the one above — passing
+			// just as happily against a wrong "any disagreement vetoes" rule.
+			name:       "qualifying label disagreeing beside an agreeing value",
+			idLines:    lines(labelLine("FORM2024", 0.99), textLine(t, "B11902001", 0.95)),
 			wantStatus: StatusAuto,
-			why:        "one qualifying reading agreeing is enough: a form number is not a claim about who wrote this",
+			why:        "one qualifying reading agreeing is enough: a preprinted form number is not a claim about who wrote this",
 		},
 		{
 			name:       "printed label beside a disagreeing value",

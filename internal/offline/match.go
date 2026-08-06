@@ -362,10 +362,15 @@ func hasDigit(s string) bool {
 // A run is ASCII A-Z0-9 only, which is NARROWER than studentid.Normalize's
 // unicode.IsLetter/IsNumber test — Normalize keeps Han characters and every
 // other letter. The narrowing is deliberate: a name folded into the middle of a
-// run would make the reading unmatchable at any distance. The comparison target
-// has been through Normalize, so the two agree on every id they will actually
-// meet (ids here are ASCII-shaped); a genuinely non-ASCII id scheme would yield
-// an empty run, fail the veto's length gate, and simply produce no veto.
+// run would make the reading unmatchable at any distance. It holds for the ids
+// this system has met, which are ASCII-shaped, and it degrades in two different
+// ways outside them. A WHOLLY non-ASCII id yields an empty run, fails the veto's
+// length gate, and produces no veto — the safe direction. A MIXED-SCRIPT id
+// (Han characters inside an otherwise ASCII id) is the unsafe one: the run
+// truncates at the first Han character while the Normalized comparison target
+// keeps it, so a correctly-read id could measure several edits from itself and
+// false-veto. A roster with mixed-script ids needs this revisited — the veto's
+// run extraction and its comparison target have to fold the same way.
 func longestIDRun(s string) string {
 	best, run := []rune(nil), []rune(nil)
 	flush := func() {
