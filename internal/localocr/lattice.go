@@ -56,6 +56,19 @@ type Charset struct {
 // should hoist it out of loops rather than calling it per candidate.
 func (e *Engine) Charset() Charset { return newCharset(e.keys, e.trailingSpace) }
 
+// NewCharset builds a Charset from a dictionary directly, for callers that
+// score against a model's classes without running one: the offline matcher
+// loads the same keys file the Engine would and needs the rune -> class view,
+// and tests need it without an ONNX session. Engine.Charset stays the way a
+// LIVE engine reports its own dictionary — this is the same construction with
+// the keys supplied by the caller, so the two cannot drift.
+//
+// keys must be the model's dictionary in class order (entry i is class i+1) and
+// trailingSpace must match the export (docs/DECISIONS.md D24); a Charset built
+// from a different dictionary than the lattice's model scores nonsense, because
+// the classes it returns index the wrong rows.
+func NewCharset(keys []rune, trailingSpace bool) Charset { return newCharset(keys, trailingSpace) }
+
 // newCharset builds the rune -> class index. Duplicate dictionary entries keep
 // their FIRST class (the decoder would emit either, and the lower class is the
 // one a well-formed PP-OCR dictionary intends). The trailing space class is

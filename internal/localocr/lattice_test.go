@@ -404,3 +404,33 @@ func TestBestLatticeConfidence(t *testing.T) {
 		t.Fatalf("want max 0.8, got %v", got)
 	}
 }
+
+// TestNewCharset_ExportedMirrorsUnexported pins the production constructor: it
+// must build exactly what Engine.Charset builds, without an ONNX session in the
+// way, so an offline matcher (or a fixture-driven tool) can score against a
+// dictionary it loaded itself.
+func TestNewCharset_ExportedMirrorsUnexported(t *testing.T) {
+	keys := []rune{'a', 'b', 'c'}
+	for _, trailingSpace := range []bool{false, true} {
+		want := newCharset(keys, trailingSpace)
+		got := NewCharset(keys, trailingSpace)
+		if got.NumClasses() != want.NumClasses() {
+			t.Errorf("trailingSpace=%v: NumClasses = %d, want %d", trailingSpace, got.NumClasses(), want.NumClasses())
+		}
+		for _, r := range []rune{'a', 'b', 'c', ' ', 'z'} {
+			gotCls, gotOK := got.Class(r)
+			wantCls, wantOK := want.Class(r)
+			if gotCls != wantCls || gotOK != wantOK {
+				t.Errorf("trailingSpace=%v: Class(%q) = (%d,%v), want (%d,%v)", trailingSpace, r, gotCls, gotOK, wantCls, wantOK)
+			}
+		}
+	}
+
+	// The exported constructor is enough on its own to score a target: no
+	// Engine, no model, no dictionary file.
+	cs := NewCharset(keys, false)
+	l := NewLattice([][]float32{{0.1, 0.7, 0.1, 0.1}}, 0)
+	if _, ok := ScoreTarget(l, cs, "a", ScoreOptions{}); !ok {
+		t.Error("ScoreTarget against a NewCharset-built charset should be scorable")
+	}
+}
