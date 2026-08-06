@@ -71,12 +71,28 @@ var retryVariants = [...]func(*image.Gray) *image.Gray{shaveBorder, contrastStre
 // confidence result. Cost bound: at most two extra passes, zero on confident
 // reads; a variant pass that reaches retryConfidence stops the loop.
 func readLinesRetry(ctx context.Context, gray *image.Gray, rec recognizeFn) ([]ocr.Line, error) {
-	best, err := readBands(ctx, gray, rec)
+	return retryLadder(ctx, gray, func(ctx context.Context, g *image.Gray) ([]ocr.Line, error) {
+		return readBands(ctx, g, rec)
+	}, bestLineConfidence)
+}
+
+// retryLadder is the decision rule above, independent of what a pass produces
+// per line: run once, and only on a weak result re-run the variants and keep
+// the best pass. Engine.ReadLattices needs the same ladder over a payload that
+// also carries the CTC lattice (LineLattice), and the rule — which variants, in
+// what order, when to stop — must not exist in two copies that can drift apart.
+func retryLadder[T any](
+	ctx context.Context,
+	gray *image.Gray,
+	pass func(context.Context, *image.Gray) ([]T, error),
+	bestConf func([]T) float64,
+) ([]T, error) {
+	best, err := pass(ctx, gray)
 	if err != nil {
 		return nil, err
 	}
-	bestConf := bestLineConfidence(best)
-	if bestConf >= retryConfidence {
+	bestC := bestConf(best)
+	if bestC >= retryConfidence {
 		return best, nil
 	}
 	for _, variant := range retryVariants {
@@ -84,13 +100,13 @@ func readLinesRetry(ctx context.Context, gray *image.Gray, rec recognizeFn) ([]o
 		if v == nil {
 			continue // not applicable to this crop; no pass consumed
 		}
-		lines, err := readBands(ctx, v, rec)
+		got, err := pass(ctx, v)
 		if err != nil {
 			return nil, err
 		}
-		if c := bestLineConfidence(lines); c > bestConf {
-			best, bestConf = lines, c
-			if bestConf >= retryConfidence {
+		if c := bestConf(got); c > bestC {
+			best, bestC = got, c
+			if bestC >= retryConfidence {
 				break // confident rescue; skip any remaining variant
 			}
 		}
@@ -102,22 +118,32 @@ func readLinesRetry(ctx context.Context, gray *image.Gray, rec recognizeFn) ([]o
 // inference pass over the crop. Empty recognitions are skipped; lines come
 // back in top-to-bottom order.
 func readBands(ctx context.Context, gray *image.Gray, rec recognizeFn) ([]ocr.Line, error) {
+	return readBandsWith(ctx, gray, func(img image.Image) (ocr.Line, bool, error) {
+		text, conf, err := rec(img)
+		return ocr.Line{Text: text, Confidence: conf}, text != "", err
+	})
+}
+
+// readBandsWith is the band loop shared by the text and lattice paths: split,
+// recognize top-to-bottom, honor cancellation between bands, and drop the
+// bands the recognizer reports as empty (keep == false).
+func readBandsWith[T any](ctx context.Context, gray *image.Gray, rec func(img image.Image) (T, bool, error)) ([]T, error) {
 	bands := splitLines(gray)
-	lines := make([]ocr.Line, 0, len(bands))
+	out := make([]T, 0, len(bands))
 	for _, r := range bands {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		text, conf, err := rec(gray.SubImage(r))
+		v, keep, err := rec(gray.SubImage(r))
 		if err != nil {
 			return nil, err
 		}
-		if text == "" {
+		if !keep {
 			continue
 		}
-		lines = append(lines, ocr.Line{Text: text, Confidence: conf})
+		out = append(out, v)
 	}
-	return lines, nil
+	return out, nil
 }
 
 // bestLineConfidence is the maximum line confidence, 0 when nothing was read.

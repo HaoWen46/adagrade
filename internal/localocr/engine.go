@@ -227,19 +227,79 @@ func (e *Engine) ReadLines(ctx context.Context, crop imaging.IDCrop) ([]ocr.Line
 	return readLinesRetry(ctx, toGray(src), e.recognize)
 }
 
+// ReadLattices is ReadLines with the model's per-timestep class distribution
+// kept: same band split, same retry ladder, but each line also carries the
+// top-K CTC lattice of the WINNING variant's inference pass, so a lexicon
+// scorer can ask how well an arbitrary candidate string explains the same
+// pixels the reported text came from. Low-confidence lines are returned like
+// any other (with their lattices); the caller decides what to do with them.
+func (e *Engine) ReadLattices(ctx context.Context, crop imaging.IDCrop) ([]LineLattice, error) {
+	if crop.IsZero() {
+		return nil, fmt.Errorf("localocr: empty IDCrop")
+	}
+	src, err := jpeg.Decode(bytes.NewReader(crop.JPEG()))
+	if err != nil {
+		return nil, fmt.Errorf("localocr: decode crop JPEG: %w", err)
+	}
+	return retryLadder(ctx, toGray(src), func(ctx context.Context, g *image.Gray) ([]LineLattice, error) {
+		return readBandsWith(ctx, g, e.recognizeLattice)
+	}, bestLatticeConfidence)
+}
+
 // recognize runs one line-band image through preprocess -> session -> CTC.
 func (e *Engine) recognize(img image.Image) (string, float64, error) {
+	rows, err := e.runLine(img)
+	if err != nil {
+		return "", 0, err
+	}
+	text, conf := e.decode(rows)
+	return text, conf, nil
+}
+
+// recognizeLattice runs one line band and returns its greedy decode alongside a
+// lattice built from the SAME rows, for the retry ladder's band loop (the bool
+// reports whether anything was read, mirroring recognize's empty-text skip).
+//
+// The lattice is compressed here, per pass, rather than carrying raw rows
+// through the ladder and compressing only the winner: a lattice is ~40KB where
+// the rows behind it are ~2MB, and identify workers run concurrently, so the
+// discarded work on the (rare) retry path buys a bounded memory footprint.
+func (e *Engine) recognizeLattice(img image.Image) (LineLattice, bool, error) {
+	rows, err := e.runLine(img)
+	if err != nil {
+		return LineLattice{}, false, err
+	}
+	text, conf := e.decode(rows)
+	// NewLattice takes the RAW rows: it re-applies the softmaxed/logits
+	// decision itself and needs the logits to compute log-softmax directly.
+	return LineLattice{Lattice: NewLattice(rows, latticeTopK), Text: text, Confidence: conf}, text != "", nil
+}
+
+// decode greedy-decodes raw model rows, normalizing first when the export does
+// not end in a Softmax node.
+func (e *Engine) decode(rows [][]float32) (string, float64) {
+	if len(rows) > 0 && !looksSoftmaxed(rows[0]) {
+		rows = softmaxRows(rows)
+	}
+	return ctcGreedyDecode(rows, e.keys, e.trailingSpace)
+}
+
+// runLine runs one line-band image through preprocess -> session and returns
+// the model's raw [T][C] output rows. It is the single inference path: both
+// the text and the lattice callers go through it, so the closed-engine guard
+// and the mutex discipline (D26) exist in exactly one place.
+func (e *Engine) runLine(img image.Image) ([][]float32, error) {
 	// Fast closed-check before allocating a native ORT tensor: a Close may have
 	// already Destroyed the session, in which case there is nothing to run. The
 	// authoritative re-check happens again under e.mu just before Run so a Close
 	// racing this call cannot free the session mid-Run (D26).
 	if e.closed() {
-		return "", 0, errEngineClosed
+		return nil, errEngineClosed
 	}
 	data, shape := preprocess(img, recHeight, recMaxW, recMinW)
 	in, err := ort.NewTensor(ort.NewShape(shape...), data)
 	if err != nil {
-		return "", 0, fmt.Errorf("localocr: build input tensor: %w", err)
+		return nil, fmt.Errorf("localocr: build input tensor: %w", err)
 	}
 	defer in.Destroy()
 
@@ -249,28 +309,23 @@ func (e *Engine) recognize(img image.Image) (string, float64, error) {
 	e.mu.Lock()
 	if e.session == nil {
 		e.mu.Unlock()
-		return "", 0, errEngineClosed
+		return nil, errEngineClosed
 	}
 	err = e.session.Run([]ort.Value{in}, outputs)
 	e.mu.Unlock()
 	if err != nil {
-		return "", 0, fmt.Errorf("localocr: inference: %w", err)
+		return nil, fmt.Errorf("localocr: inference: %w", err)
 	}
 	out := outputs[0]
 	defer out.Destroy()
 
-	rows, err := outputToRows(out)
-	if err != nil {
-		return "", 0, err
-	}
-	if len(rows) > 0 && !looksSoftmaxed(rows[0]) {
-		rows = softmaxRows(rows)
-	}
-	text, conf := ctcGreedyDecode(rows, e.keys, e.trailingSpace)
-	return text, conf, nil
+	return outputToRows(out)
 }
 
 // outputToRows reshapes a [1, T, C] float32 output Value into a [T][C] matrix.
+// The data is COPIED out of the tensor: the returned rows outlive the ort.Value
+// (runLine Destroys it before returning), and slicing the native buffer would
+// leave the caller reading freed memory.
 func outputToRows(v ort.Value) ([][]float32, error) {
 	t, ok := v.(*ort.Tensor[float32])
 	if !ok {
@@ -286,9 +341,11 @@ func outputToRows(v ort.Value) ([][]float32, error) {
 	if len(flat) < T*C {
 		return nil, fmt.Errorf("localocr: output data too short: have %d want %d", len(flat), T*C)
 	}
+	buf := make([]float32, T*C)
+	copy(buf, flat[:T*C])
 	rows := make([][]float32, T)
 	for i := 0; i < T; i++ {
-		rows[i] = flat[i*C : (i+1)*C]
+		rows[i] = buf[i*C : (i+1)*C : (i+1)*C]
 	}
 	return rows, nil
 }
