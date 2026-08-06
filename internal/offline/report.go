@@ -5,7 +5,6 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strconv"
 	"time"
 )
@@ -130,7 +129,10 @@ func WriteMatchCSV(path string, results []MatchResult) error {
 	if err := w.Error(); err != nil {
 		return newOutDirError(err, "cannot format the match report")
 	}
-	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+	// 0600 (mask.go's PII modes): every row pairs a student id and a name with
+	// the page they were assigned, which makes this the most directly readable
+	// identity artifact the run writes.
+	if err := writePrivate(path, buf.Bytes()); err != nil {
 		return newOutDirError(err, "cannot write the match report %s", path)
 	}
 	return nil
@@ -166,7 +168,7 @@ func WriteMatchJSON(path string, results []MatchResult, meta Meta) error {
 		return newOutDirError(err, "cannot format the match report JSON")
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := writePrivate(path, data); err != nil {
 		return newOutDirError(err, "cannot write the match report %s", path)
 	}
 	return nil

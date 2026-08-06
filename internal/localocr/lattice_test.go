@@ -434,3 +434,19 @@ func TestNewCharset_ExportedMirrorsUnexported(t *testing.T) {
 		t.Error("ScoreTarget against a NewCharset-built charset should be scorable")
 	}
 }
+
+// TestNewCharset_ClonesTheKeys — keys and index are built together, so a
+// Charset that ALIASED the caller's slice could be desynced from the outside:
+// the map still says 'a' is class 1 while keys[0] has become something else,
+// and every consumer that reads the dictionary sees a different alphabet than
+// the one Class answers for.
+func TestNewCharset_ClonesTheKeys(t *testing.T) {
+	keys := []rune{'a', 'b', 'c'}
+	cs := NewCharset(keys, false)
+
+	keys[0] = 'z'
+
+	if cs.keys[0] != 'a' {
+		t.Errorf("Charset aliases the caller's slice: keys[0] = %q, want 'a'", cs.keys[0])
+	}
+}

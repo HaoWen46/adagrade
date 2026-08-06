@@ -45,7 +45,10 @@ func RenderPages(ctx context.Context, r render.Renderer, scans []string, pagesDi
 	if len(scans) == 0 {
 		return nil, newScanError(nil, "no scan files to render: pass --scans FILE (repeatable) or list scan paths after all flags")
 	}
-	if err := os.MkdirAll(pagesDir, 0o755); err != nil {
+	// 0700/0600 (mask.go's PII modes): a rendered page is a photograph of a
+	// student's paper, identity band included, and is no more shareable than the
+	// masked derivative or the bundle.
+	if err := mkdirPrivate(pagesDir); err != nil {
 		return nil, newScanError(err, "cannot create page directory %s", pagesDir)
 	}
 
@@ -96,7 +99,7 @@ func renderOne(ctx context.Context, r render.Renderer, scan, pagesDir string, op
 			JPEG:       rendered.JPEG,
 		}
 		path := filepath.Join(pagesDir, PageFilename(page.Index))
-		if err := os.WriteFile(path, page.JPEG, 0o644); err != nil {
+		if err := writePrivate(path, page.JPEG); err != nil {
 			return nil, newScanError(err, "cannot write page image %s", path)
 		}
 		pages = append(pages, page)

@@ -275,3 +275,34 @@ func (d *trackingDoc) Close() error {
 	}
 	return nil
 }
+
+// TestRenderPages_WritesPrivateArtifacts — a rendered page is a photograph of a
+// student's paper, name and all. It gets the same 0600-under-0700 treatment as
+// everything the mask and bundle stages write; nothing this mode produces is
+// safe to leave world-readable on a shared machine.
+func TestRenderPages_WritesPrivateArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	pagesDir := filepath.Join(dir, "pages")
+	pages, err := RenderPages(context.Background(), render.NewFake(2), []string{writeScan(t, dir, "a.pdf")}, pagesDir, 200, 1600, 85)
+	if err != nil {
+		t.Fatalf("RenderPages: %v", err)
+	}
+
+	info, err := os.Stat(pagesDir)
+	if err != nil {
+		t.Fatalf("stat pages dir: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Errorf("pages dir mode = %04o, want 0700", got)
+	}
+	for _, p := range pages {
+		path := filepath.Join(pagesDir, PageFilename(p.Index))
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", path, err)
+		}
+		if got := fi.Mode().Perm(); got != 0o600 {
+			t.Errorf("%s mode = %04o, want 0600", path, got)
+		}
+	}
+}

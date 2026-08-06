@@ -369,3 +369,24 @@ func TestTypedErrorsWrapAndExplain(t *testing.T) {
 		t.Errorf("Error() with nil cause = %q, want %q", got, "plain message")
 	}
 }
+
+// TestUsageDescribesTheMarginItActuallyMeasures — --min-margin is measured
+// against the best cell of a DIFFERENT student (match.go's studentMargin), and
+// explicitly NOT against the runner-up cell: a page that identifies its student
+// beyond doubt but leaves the problem number blank ties every one of that
+// student's cells at the top, so runner-up semantics would throw it away as
+// ambiguous. Help text describing the semantics the code rejects would have an
+// operator tune the flag in the wrong direction.
+func TestUsageDescribesTheMarginItActuallyMeasures(t *testing.T) {
+	_, err := ParseArgs([]string{"-h"})
+	if err == nil {
+		t.Fatal("-h must return the usage text as an error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "different student") {
+		t.Errorf("--min-margin help must say the margin is over a DIFFERENT student:\n%s", msg)
+	}
+	if strings.Contains(msg, "runner-up") {
+		t.Errorf("--min-margin help still describes runner-up semantics:\n%s", msg)
+	}
+}

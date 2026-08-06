@@ -290,10 +290,15 @@ func TestRun_ArtifactModesArePrivate(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	for _, dir := range []string{"", unmatchedDirName, maskedDirName} {
+	for _, dir := range []string{"", pagesDirName, cropsDirName, unmatchedDirName, maskedDirName} {
 		requireMode(t, f.path(dir), 0o700)
 	}
-	for _, file := range []string{runLogName, maskPreviewName, filepath.Join(maskedDirName, PageFilename(1))} {
+	for _, file := range []string{
+		runLogName, matchCSVName, matchJSONName, maskPreviewName,
+		filepath.Join(pagesDirName, PageFilename(1)),
+		filepath.Join(cropsDirName, bandCropFilename(1)),
+		filepath.Join(maskedDirName, PageFilename(1)),
+	} {
 		requireMode(t, f.path(file), 0o600)
 	}
 	// Which page went unmatched is the solver's call, so the set-aside copy is
@@ -584,5 +589,55 @@ func TestRun_OCRFailureIsAnOCRError(t *testing.T) {
 	_, err := Run(context.Background(), f.opts, f.deps)
 	if got := ExitCode(err); got != ExitOCR {
 		t.Fatalf("ExitCode = %d (err %v), want %d", got, err, ExitOCR)
+	}
+}
+
+// TestRun_MissingDependenciesFailBeforeAnythingIsWritten — the three Deps that
+// have no usable zero value. The Charset is the dangerous one: an empty
+// dictionary scores nothing, which the matcher would report as an unreadable
+// identity band (exit 9) and send the operator to re-scan pages that were fine.
+func TestRun_MissingDependenciesFailBeforeAnythingIsWritten(t *testing.T) {
+	tests := []struct {
+		name string
+		mut  func(*Deps)
+	}{
+		{"no renderer", func(d *Deps) { d.Renderer = nil }},
+		{"no ocr", func(d *Deps) { d.OCR = nil }},
+		{"zero charset", func(d *Deps) { d.Charset = localocr.Charset{} }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRunFixture(t, 3, 3, 1)
+			tc.mut(&f.deps)
+
+			_, err := Run(context.Background(), f.opts, f.deps)
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			if got := ExitCode(err); got != ExitFailure {
+				t.Errorf("ExitCode = %d (err %v), want %d: a wiring bug has no operator remedy", got, err, ExitFailure)
+			}
+			requireAbsent(t, f.out)
+		})
+	}
+}
+
+// TestRun_CancelledCellsAreNotReportedAsFailures — wording, and it matters: a
+// screenful of "transcription failed" after a Ctrl-C reads as a provider that
+// refused the batch, and sends the operator to check a key that is fine.
+func TestRun_CancelledCellsAreNotReportedAsFailures(t *testing.T) {
+	f := newRunFixture(t, 3, 3, 1)
+	f.opts.Concurrency = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.useProvider(transcriptionServer(t, func(int) { cancel() }).URL)
+
+	if _, err := Run(ctx, f.opts, f.deps); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want a cancellation", err)
+	}
+
+	log := readRunLog(t, f.out)
+	if !strings.Contains(log, "the run was cancelled") {
+		t.Errorf("cancelled cells should say so:\n%s", log)
 	}
 }

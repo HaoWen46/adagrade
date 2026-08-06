@@ -67,7 +67,14 @@ func (e *Engine) Charset() Charset { return newCharset(e.keys, e.trailingSpace) 
 // trailingSpace must match the export (docs/DECISIONS.md D24); a Charset built
 // from a different dictionary than the lattice's model scores nonsense, because
 // the classes it returns index the wrong rows.
-func NewCharset(keys []rune, trailingSpace bool) Charset { return newCharset(keys, trailingSpace) }
+//
+// keys is CLONED. The Charset's dictionary and its rune -> class index are built
+// together and are only meaningful as a pair, so aliasing the caller's slice
+// would let a later write through it desync the two — the map still answering
+// for an alphabet the keys no longer describe.
+func NewCharset(keys []rune, trailingSpace bool) Charset {
+	return newCharset(slices.Clone(keys), trailingSpace)
+}
 
 // newCharset builds the rune -> class index. Duplicate dictionary entries keep
 // their FIRST class (the decoder would emit either, and the lower class is the

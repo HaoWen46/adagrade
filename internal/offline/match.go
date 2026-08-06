@@ -149,6 +149,11 @@ func cellComponents(idPost, namePost, probPost float64, idRead, nameRead, probRe
 // rows rather than errors: an offline run's job is to place what it can and be
 // honest about the rest.
 //
+// A batch where NOTHING could be placed is not an error here either: every page
+// still gets a row saying why it was set aside. The whole-run verdict — zero
+// matched pages is a failed run (*NoMatchError, exit 9) — belongs to Run, which
+// reaches it only after those rows are on disk, because they are the diagnosis.
+//
 // The returned slice is parallel to pages, so callers can zip it back against
 // their own bookkeeping.
 func MatchPages(pages []PageRead, rows []roster.Row, problems int, cs localocr.Charset, minScore, minMargin float64) ([]MatchResult, error) {
@@ -211,6 +216,11 @@ func MatchPages(pages []PageRead, rows []roster.Row, problems int, cs localocr.C
 
 	solution, err := assign.Solve(cost)
 	if err != nil {
+		// Deliberately UNTYPED (exit 1). assign.Solve rejects exactly three
+		// things — a ragged matrix, a zero-width one, and a non-finite cost —
+		// and all three are bugs in the loop above, not inputs the operator can
+		// fix. Claiming a roster or a scan exit code would send someone to edit
+		// a file that is not the problem.
 		return nil, fmt.Errorf("offline: assignment failed over %d pages and %d cells: %w", len(pages), cells, err)
 	}
 

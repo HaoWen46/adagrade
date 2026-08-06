@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
-	"os"
 	"path/filepath"
 
 	"github.com/HaoWen46/adagrade/internal/imaging"
@@ -31,10 +30,18 @@ type FieldLattices struct {
 
 // Identity is one page's identity read: the lattices per configured region kind.
 //
-// A kind is present only if the region set configured it. Absent means "there
-// was nothing to read", which the scorer must not confuse with "read and blank"
-// — a page whose problem_id region simply does not exist scores the same as one
-// whose problem box was left empty, but they arrive here differently.
+// A kind is present only if the region set configured it, and the map keeps two
+// different facts apart: an ABSENT kind means no rectangle was configured, so
+// nothing was ever looked at, while a PRESENT kind with no lines means the box
+// was cropped, read, and found empty. Only the second leaves an artifact in
+// crops/, which is how a human tells them apart afterwards.
+//
+// The scorer folds the two together on purpose: both leave the field unread
+// (score.go's FieldResult.Read), and an unread field contributes exactly zero to
+// every candidate rather than having its weight redistributed (match.go). So a
+// page with no problem_id region does score the same as one whose problem box
+// was left blank — the distinction is kept here for the reader and the
+// artifacts, not for the arithmetic.
 //
 // In band mode (RegionSet.Banded) all three kinds ALIAS one FieldLattices: one
 // crop of the top strip is read once, and the same Lines slice is referenced by
@@ -77,7 +84,9 @@ func ReadIdentity(ctx context.Context, ocr latticeReader, page Page, regions Reg
 	if err != nil {
 		return Identity{}, newScanError(err, "page %d (%s page %d) is not a decodable JPEG", page.Index, page.SourcePDF, page.SourcePage)
 	}
-	if err := os.MkdirAll(cropsDir, 0o755); err != nil {
+	// 0700/0600 (mask.go's PII modes): a crop is the identity band itself, cut
+	// out of the page and saved on its own.
+	if err := mkdirPrivate(cropsDir); err != nil {
 		return Identity{}, newOutDirError(err, "cannot create crop directory %s", cropsDir)
 	}
 
@@ -125,7 +134,7 @@ func readOneCrop(ctx context.Context, ocr latticeReader, src image.Image, page P
 		return nil, newRegionsError(err, "cannot crop the %q region out of page %d (%s page %d): check the region coordinates",
 			region.Kind, page.Index, page.SourcePDF, page.SourcePage)
 	}
-	if err := os.WriteFile(cropPath, crop.JPEG(), 0o644); err != nil {
+	if err := writePrivate(cropPath, crop.JPEG()); err != nil {
 		return nil, newOutDirError(err, "cannot write crop artifact %s", cropPath)
 	}
 	lines, err := ocr.ReadLattices(ctx, crop)

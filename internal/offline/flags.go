@@ -106,7 +106,11 @@ func ParseArgs(args []string) (Options, error) {
 	fs.IntVar(&opts.LongEdge, "long-edge", DefaultLongEdge, "downscale each page so its long edge is at most this many pixels")
 	fs.IntVar(&opts.JPEGQuality, "jpeg-quality", DefaultJPEGQuality, "JPEG quality for rendered and masked page images")
 	fs.Float64Var(&opts.MinScore, "min-score", DefaultMinScore, "minimum match score for a page to be assigned")
-	fs.Float64Var(&opts.MinMargin, "min-margin", DefaultMinMargin, "minimum score margin over the runner-up for a page to be assigned")
+	// Not "over the runner-up": the matcher measures the margin against the best
+	// cell of a DIFFERENT student (match.go's studentMargin), and an operator
+	// tuning this flag against runner-up semantics would be tuning it against
+	// behaviour the code deliberately rejects.
+	fs.Float64Var(&opts.MinMargin, "min-margin", DefaultMinMargin, "minimum score margin over the best cell of a different student for a page to be assigned")
 	fs.StringVar(&opts.StopAfter, "stop-after", "", "stop the run after a stage: match|mask (default: run everything)")
 
 	fs.StringVar(&opts.Provider, "provider", "", "provider name from the environment provider table")

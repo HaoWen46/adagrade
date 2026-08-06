@@ -355,3 +355,30 @@ func TestReadIdentity_Errors(t *testing.T) {
 		}
 	})
 }
+
+// TestReadIdentity_WritesPrivateCrops — a crop is the identity band itself, cut
+// out and saved on its own. If any artifact in this tree has to be private, it
+// is this one.
+func TestReadIdentity_WritesPrivateCrops(t *testing.T) {
+	dir := t.TempDir()
+	cropsDir := filepath.Join(dir, "crops")
+	if _, err := ReadIdentity(context.Background(), &fakeReader{}, testPage(t, 4), BandRegions(0.18), cropsDir); err != nil {
+		t.Fatalf("ReadIdentity: %v", err)
+	}
+
+	info, err := os.Stat(cropsDir)
+	if err != nil {
+		t.Fatalf("stat crops dir: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Errorf("crops dir mode = %04o, want 0700", got)
+	}
+	crop := filepath.Join(cropsDir, bandCropFilename(4))
+	fi, err := os.Stat(crop)
+	if err != nil {
+		t.Fatalf("stat %s: %v", crop, err)
+	}
+	if got := fi.Mode().Perm(); got != 0o600 {
+		t.Errorf("%s mode = %04o, want 0600", crop, got)
+	}
+}

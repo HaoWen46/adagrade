@@ -132,11 +132,19 @@ func Run(ctx context.Context, o Options, d Deps) (Summary, error) {
 
 	// Wiring bugs, not operator mistakes: they cannot be reached through the
 	// CLI, and there is no remedy to print, so they stay unclassified (exit 1).
+	//
+	// The Charset is checked because its zero value FAILS QUIETLY: an empty
+	// dictionary makes every candidate unscorable, which the matcher reads as
+	// "the identity band could not be read" and turns into an exit 9 blaming the
+	// scans. A dictionary of one class is not a dictionary.
 	if d.Renderer == nil {
 		return summary, errors.New("offline: Run needs a Renderer")
 	}
 	if d.OCR == nil {
 		return summary, errors.New("offline: Run needs a local OCR reader")
+	}
+	if d.Charset.NumClasses() <= 1 {
+		return summary, errors.New("offline: Run needs the OCR model's Charset; the zero value scores nothing and would report every page as unreadable")
 	}
 
 	// 1. The warning comes first and unconditionally, before any work: it exists
@@ -172,7 +180,7 @@ func Run(ctx context.Context, o Options, d Deps) (Summary, error) {
 	if err != nil {
 		return summary, err
 	}
-	log.stage("regions", started, "source=%s regions=%d mask_regions=%d", source, len(regions.All()), len(regions.MaskRegions()))
+	log.stage("regions", started, "source=%s read_regions=%d mask_regions=%d", source, readRegionCount(regions), len(regions.MaskRegions()))
 
 	// 4. Render.
 	started = time.Now()
@@ -288,13 +296,21 @@ func Run(ctx context.Context, o Options, d Deps) (Summary, error) {
 
 	// 13. Every failed cell gets its own line, named by page and problem and by
 	// nothing else — these lines are pasted into bug reports.
+	//
+	// A cell the run never got to is worded as what it is. After a Ctrl-C every
+	// remaining cell carries a cancellation, and two hundred lines saying
+	// "transcription failed" would read as a provider that refused the batch.
 	for _, doc := range docs {
-		if doc.Err != nil {
-			summary.Failed++
-			log.line("page %d problem %d: transcription failed", doc.Result.Page.Index, doc.Result.Problem)
+		if doc.Err == nil {
+			summary.Transcribed++
 			continue
 		}
-		summary.Transcribed++
+		summary.Failed++
+		if errors.Is(doc.Err, context.Canceled) || errors.Is(doc.Err, context.DeadlineExceeded) {
+			log.line("page %d problem %d: not transcribed, the run was cancelled", doc.Result.Page.Index, doc.Result.Problem)
+			continue
+		}
+		log.line("page %d problem %d: transcription failed", doc.Result.Page.Index, doc.Result.Problem)
 	}
 	log.stage("transcribe", started, "cells=%d transcribed=%d failed=%d", len(cells), summary.Transcribed, summary.Failed)
 
@@ -346,6 +362,17 @@ func resolveRegions(o Options) (RegionSet, string, error) {
 		return set, "id-regions", err
 	}
 	return BandRegions(o.IDBand), "id-band", nil
+}
+
+// readRegionCount is how many rectangles the read stage will actually crop,
+// which is what run.log should say. RegionSet.All reports a BANDED set as three
+// regions — the one strip stamped with each kind — and logging that would tell
+// an operator who passed no --id-regions that three rectangles were configured.
+func readRegionCount(regions RegionSet) int {
+	if regions.Banded() {
+		return 1
+	}
+	return len(regions.All())
 }
 
 // runMeta is the settings block the JSON report carries, so a report read six

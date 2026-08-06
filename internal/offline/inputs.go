@@ -115,7 +115,12 @@ func PrepareOutDir(path string, force bool) error {
 	info, err := os.Stat(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		if err := os.MkdirAll(path, 0o755); err != nil {
+		// 0700 (mask.go's PII modes): everything inside is a student's page, a
+		// crop of their name, or a transcription of their answer. Only a
+		// directory this function CREATES is set — an --out that already exists
+		// is the operator's own, and every file written into it is 0600 whether
+		// or not the directory itself is narrowed.
+		if err := mkdirPrivate(path); err != nil {
 			return newOutDirError(err, "cannot create output directory %s", path)
 		}
 		return nil

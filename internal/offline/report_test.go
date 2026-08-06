@@ -309,3 +309,50 @@ func TestWriteMatchReports_Errors(t *testing.T) {
 		t.Errorf("WriteMatchJSON: ExitCode = %d, want %d", ExitCode(err), ExitOutDir)
 	}
 }
+
+// TestWriteMatchReports_PrivateModes — the match report is a list of student
+// ids and names next to the pages they were assigned. It is the most directly
+// readable identity artifact this mode writes, so it is 0600 like the rest.
+func TestWriteMatchReports_PrivateModes(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "match-report.csv")
+	jsonPath := filepath.Join(dir, "match-report.json")
+
+	if err := WriteMatchCSV(csvPath, reportFixture()); err != nil {
+		t.Fatalf("WriteMatchCSV: %v", err)
+	}
+	if err := WriteMatchJSON(jsonPath, reportFixture(), reportMeta()); err != nil {
+		t.Fatalf("WriteMatchJSON: %v", err)
+	}
+	for _, path := range []string{csvPath, jsonPath} {
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", path, err)
+		}
+		if got := fi.Mode().Perm(); got != 0o600 {
+			t.Errorf("%s mode = %04o, want 0600", path, got)
+		}
+	}
+}
+
+// TestWriteMatchReports_ReassertTheModeOnRewrite — --force licenses writing
+// over a previous run's directory, and os.WriteFile only applies its mode when
+// it CREATES the file, so a looser report left behind by an earlier run (or by
+// an operator) would otherwise keep its permissions.
+func TestWriteMatchReports_ReassertTheModeOnRewrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "match-report.csv")
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteMatchCSV(path, reportFixture()); err != nil {
+		t.Fatalf("WriteMatchCSV: %v", err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o600 {
+		t.Errorf("%s mode = %04o, want 0600", path, got)
+	}
+}

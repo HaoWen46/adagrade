@@ -21,17 +21,19 @@ import (
 // ---------------------------------------------------------------------------
 // PII file modes.
 //
-// Everything the post-match stages write — masked pages, the mask preview, the
-// transcription bundle — carries student identity and handwriting BY
-// CONSTRUCTION. There is no version of these artifacts that is safe to leave
-// world-readable on a shared machine, so they are written 0600 under 0700
-// directories, and the mode is re-asserted after the write: os.WriteFile and
-// os.MkdirAll only apply their mode when they CREATE, so a re-run with --force
-// over a previous run's (or an operator's) looser file would otherwise keep
-// whatever permissions it already had.
+// EVERYTHING this mode writes carries student identity and handwriting BY
+// CONSTRUCTION — the rendered pages, the identity crops, the match report, the
+// masked pages, the mask preview, the transcription bundle. There is no version
+// of these artifacts that is safe to leave world-readable on a shared machine,
+// so they are written 0600 under 0700 directories, and the mode is re-asserted
+// after the write: os.WriteFile and os.MkdirAll only apply their mode when they
+// CREATE, so a re-run with --force over a previous run's (or an operator's)
+// looser file would otherwise keep whatever permissions it already had.
 //
-// The rendered pages and crops of the match stage keep their own modes; this
-// rule governs the files these four stages write.
+// The two helpers below are declared here, with the rule, and are used by every
+// stage that puts a byte on disk. The one place the rule stops at the door is an
+// --out directory that already EXISTS: PrepareOutDir narrows only a directory it
+// creates itself, since the files inside are 0600 either way.
 // ---------------------------------------------------------------------------
 
 const (
