@@ -133,8 +133,8 @@ Optional assets:
 # Enables PDF/ZIP result attachments when ADAMARKER_REPORT_FONT is set.
 env npm_config_cache="$ADA_CACHE/npm" TMPDIR="$ADA_CACHE/tmp" make report-fonts
 
-# Local OCR (recommended): downloads the PP-OCRv4 model + keys dict into
-# ./data/ocr/. It does NOT install libonnxruntime — install that separately
+# Local OCR (recommended): downloads the PP-OCRv5 server rec model (~85MB) +
+# its keys dict into ./data/ocr/. It does NOT install libonnxruntime — install that separately
 # (>= 1.27; Linux: a GitHub release tarball, macOS: brew install onnxruntime).
 # Local OCR activates only when ADAMARKER_OCR_MODEL, ADAMARKER_OCR_KEYS, and
 # ADAMARKER_ONNXRUNTIME are all set (section 5). Without it the server logs a
@@ -199,8 +199,8 @@ ADAMARKER_SMTP_PASS=<smtp-password>
 
 # Optional local OCR (recommended — keeps scan identification on this machine).
 # Run make ocr-models first (section 3) and install libonnxruntime >= 1.27.
-# ADAMARKER_OCR_MODEL=$ADA_REPO/data/ocr/ch_PP-OCRv4_rec_infer.onnx
-# ADAMARKER_OCR_KEYS=$ADA_REPO/data/ocr/ppocr_keys_v1.txt
+# ADAMARKER_OCR_MODEL=$ADA_REPO/data/ocr/PP-OCRv5_server_rec_infer.onnx
+# ADAMARKER_OCR_KEYS=$ADA_REPO/data/ocr/ppocrv5_dict.txt
 # ADAMARKER_ONNXRUNTIME=/opt/onnxruntime/lib/libonnxruntime.so
 
 # Optional, but recommended before running real grading jobs.

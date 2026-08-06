@@ -104,8 +104,8 @@ type Config struct {
 
 	// Local OCR (D24): the first identification rung, entirely offline. All three
 	// are optional and never required — see LocalOCRConfigured.
-	OCRModelPath       string // path to the ch_PP-OCRv4 rec .onnx model
-	OCRKeysPath        string // path to the ppocr_keys dict .txt
+	OCRModelPath       string // path to the PP-OCRv5 server rec .onnx model (PP-OCRv5_server_rec_infer.onnx)
+	OCRKeysPath        string // path to the charset dict .txt (ppocrv5_dict.txt; the class count is validated against it)
 	ONNXRuntimeLibPath string // path to the libonnxruntime shared library
 
 	// Email (publish-email-regrade spec §3, D31). Email.Provider selects

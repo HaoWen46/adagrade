@@ -334,6 +334,18 @@ already exist — **zero new API calls**.
 - Known limits (documented in code): BGR channel order kept on Paddle convention
   (grayscale scans make it moot); handwritten-CJK name quality is best-effort —
   the ID is the load-bearing signal and the name only confirms the fuzzy rung.
+- **Amended 2026-08-06 — the engine is now PP-OCRv5 server rec.** The ~11 MB v4
+  mobile export above is superseded by the PP-OCRv5 *server* recognizer (84.5 MB,
+  `PP-OCRv5_server_rec_infer.onnx` + `ppocrv5_dict.txt`, 18,383 classes covering
+  Traditional Chinese and materially better on handwriting), fetched by the same
+  `make ocr-models`. Two mechanical consequences: the export emits RAW LOGITS
+  rather than ending in a Softmax node (detected per-row, so either shape still
+  decodes), and lines are recognized at `recMaxW=1280` instead of the v4-era 640.
+  The rationale is the `offline-grade` work, whose closed-set lattice scoring
+  needs a charset that can actually spell the roster. **v4 assets remain
+  loadable** — the class count is still validated against the keys file rather
+  than hard-coded (`validateClassCount`), so an operator who has not re-run
+  `make ocr-models` gets the older charset, not a startup failure.
 
 ## D25 — Grading policies: curated stances, prompts as firmware — `v0-default` *(user-designed 2026-07-02)*
 
