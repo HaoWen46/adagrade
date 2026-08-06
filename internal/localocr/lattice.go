@@ -11,7 +11,7 @@ import (
 // "what does this line say"; a lexicon scorer needs "how well does THIS
 // candidate string explain this line", which requires the per-timestep class
 // distribution, not just its argmax. Keeping the full [T][C] matrix is
-// wasteful (C is ~6.6k classes for the PP-OCR dictionary and every candidate
+// wasteful (C is 18,385 classes for the PP-OCRv5 dictionary and every candidate
 // only ever asks about a handful of them), so the distribution is compressed
 // to the top K classes per timestep plus one honest floor for everything else.
 
@@ -19,7 +19,8 @@ const (
 	// latticeTopK is the compression width used by the Engine. 64 classes per
 	// timestep comfortably covers the argmax plus its realistic confusions
 	// (0/O, 1/l/I, visually close CJK glyphs) while cutting the stored matrix
-	// by ~100x; anything a candidate asks for beyond that scores at the
+	// by ~287x on the v5 charset (18,385 classes down to 64 per timestep);
+	// anything a candidate asks for beyond that scores at the
 	// residual floor, which is the correct answer for a class the model gave
 	// essentially no mass.
 	latticeTopK = 64
@@ -52,7 +53,7 @@ type Charset struct {
 }
 
 // Charset returns the engine's dictionary view. It builds a fresh index on
-// every call (one map over the ~6.6k-entry PP-OCR dictionary), so callers
+// every call (one map over the 18,383-entry ppocrv5_dict.txt), so callers
 // should hoist it out of loops rather than calling it per candidate.
 func (e *Engine) Charset() Charset { return newCharset(e.keys, e.trailingSpace) }
 
@@ -142,7 +143,7 @@ type Lattice struct {
 // The two forms are deliberately asymmetric about a class ABOVE the class
 // axis: the dense form knows C and panics, while the sparse form does not
 // retain C (only the kept classes and the floor) and so cannot tell "class
-// 9999 of 6625" apart from "a class that missed the cut" — it returns the
+// 99999 of 18385" apart from "a class that missed the cut" — it returns the
 // floor. Callers must take classes from Charset.Class rather than inventing
 // indices; a class the dictionary does not contain has no lattice meaning.
 func (l Lattice) LogProbAt(t, class int) float64 {
@@ -315,7 +316,7 @@ type keptClass struct {
 
 // topKSelector keeps the K highest-scoring classes of one timestep in a bounded
 // min-heap: O(C log K) per timestep. A full sort would be O(C log C) with
-// C ~= 6.6k classes at every one of the ~80 timesteps of every line, for a
+// C = 18,385 classes at every one of the ~80 timesteps of every line, for a
 // result that discards all but 64 of them.
 type topKSelector struct {
 	k    int

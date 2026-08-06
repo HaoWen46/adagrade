@@ -390,7 +390,10 @@ func modelIO(path string) (inName, outName string, outClasses int, err error) {
 	inName = ins[0].Name
 	outName = outs[0].Name
 	// Output dims: [batch, T, C]; C is the last dim if it is statically known
-	// (>0). Dynamic dims are reported as <= 0.
+	// (>0). Dynamic dims are reported as <= 0 — that is onnxruntime_go v1.31.0's
+	// convention (InputOutputInfo.Dimensions, a Shape of int64), pinned here so
+	// an upgrade that changes how unknown dims are spelled shows up as a stale
+	// citation rather than as a silently wrong class count.
 	dims := outs[0].Dimensions
 	if n := len(dims); n > 0 {
 		if c := dims[n-1]; c > 0 {

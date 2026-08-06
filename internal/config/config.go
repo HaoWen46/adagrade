@@ -546,8 +546,10 @@ func LoadProviders(getenv func(string) string) ([]Provider, error) {
 }
 
 // loadProviders resolves LLM providers. An explicit ADAMARKER_PROVIDERS list wins;
-// otherwise well-known vendor keys (DEEPSEEK_API_KEY, QWEN_API_KEY) are auto-detected
-// with their documented default base URLs (D11).
+// otherwise well-known vendor keys (DEEPSEEK_API_KEY, QWEN_API_KEY,
+// OPENROUTER_API_KEY) are auto-detected with their documented default base URLs
+// (D11) — the same three the exported doc above lists, and the same three the
+// body below actually checks.
 func loadProviders(getenv func(string) string) ([]Provider, error) {
 	if list := getenv(envProviders); list != "" {
 		var out []Provider

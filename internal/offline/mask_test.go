@@ -431,11 +431,14 @@ func TestWriteContactSheet_OverflowsPastSixtyTiles(t *testing.T) {
 	}
 }
 
-// TestWriteContactSheet_CropsTheMaskUnionOnly — the preview shows the identity
-// area, which is the union of the MASK regions. Including the unmasked
-// problem_id region (halfway down the page) would make every tile a whole page
-// and the sheet useless for checking mask placement.
-func TestWriteContactSheet_CropsTheMaskUnionOnly(t *testing.T) {
+// TestWriteContactSheet_CropsTheMaskUnionPlusContext — the preview shows the
+// identity area: the union of the MASK regions, grown by a fixed margin so the
+// mask's EDGES are visible against the page (a tile cropped to the union alone
+// cannot show a mask that fell short of the ink it was meant to cover). What it
+// does NOT include is the unmasked problem_id region halfway down the page,
+// which would make every tile a whole page and the sheet useless for checking
+// mask placement.
+func TestWriteContactSheet_CropsTheMaskUnionPlusContext(t *testing.T) {
 	regions := boxRegions(t)
 	masked := maskedFixture(t, 1, boxPageJPEG, 800, 400, regions)
 	out := filepath.Join(t.TempDir(), "masked-preview.jpg")

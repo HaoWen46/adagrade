@@ -79,35 +79,42 @@ OCR_KEYS_URL  := https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/main/p
 OCR_MODEL_MIN_BYTES := 80000000
 OCR_KEYS_MIN_LINES  := 18000
 
+# Both assets download to a .part file and are moved into place only after their
+# size/line gate passes: the gates above are also the SKIP conditions, so a
+# Ctrl-C'd 80MB partial written straight to $(OCR_MODEL) would be large enough to
+# be mistaken for a complete model on the next run and would fail later, at load
+# time, as an unreadable ONNX graph. mv within one directory is atomic.
 ocr-models:
 	@mkdir -p $(OCR_DIR)
 	@if [ -f $(OCR_MODEL) ] && [ "$$(wc -c < $(OCR_MODEL) | tr -d ' ')" -ge $(OCR_MODEL_MIN_BYTES) ]; then \
 		echo "PP-OCRv5 server rec model already present — skipping download."; \
 	else \
 		echo "Downloading PP-OCRv5 server rec model (~85MB)..."; \
-		curl -fL --retry 3 -o $(OCR_MODEL) "$(OCR_MODEL_URL)" || \
-		curl -fL --retry 3 -o $(OCR_MODEL) "$(OCR_MODEL_ALT)" || \
-		{ echo "error: both mirrors failed for $(OCR_MODEL)"; rm -f $(OCR_MODEL); exit 1; }; \
-		size=$$(wc -c < $(OCR_MODEL) | tr -d ' '); \
+		curl -fL --retry 3 -o $(OCR_MODEL).part "$(OCR_MODEL_URL)" || \
+		curl -fL --retry 3 -o $(OCR_MODEL).part "$(OCR_MODEL_ALT)" || \
+		{ echo "error: both mirrors failed for $(OCR_MODEL)"; rm -f $(OCR_MODEL).part; exit 1; }; \
+		size=$$(wc -c < $(OCR_MODEL).part | tr -d ' '); \
 		if [ "$$size" -lt $(OCR_MODEL_MIN_BYTES) ]; then \
-			echo "error: $(OCR_MODEL) is only $$size bytes (want >80MB) — download likely failed"; \
-			rm -f $(OCR_MODEL); \
+			echo "error: the download is only $$size bytes (want >80MB) — discarding the partial file"; \
+			rm -f $(OCR_MODEL).part; \
 			exit 1; \
 		fi; \
+		mv $(OCR_MODEL).part $(OCR_MODEL); \
 		echo "model ok ($$size bytes)"; \
 	fi
 	@if [ -f $(OCR_KEYS) ] && [ "$$(wc -l < $(OCR_KEYS) | tr -d ' ')" -ge $(OCR_KEYS_MIN_LINES) ]; then \
 		echo "ppocrv5_dict.txt already present — skipping download."; \
 	else \
 		echo "Downloading ppocrv5_dict charset..."; \
-		curl -fL --retry 3 -o $(OCR_KEYS) "$(OCR_KEYS_URL)" || \
-		{ echo "error: download failed for $(OCR_KEYS)"; rm -f $(OCR_KEYS); exit 1; }; \
-		lines=$$(wc -l < $(OCR_KEYS) | tr -d ' '); \
+		curl -fL --retry 3 -o $(OCR_KEYS).part "$(OCR_KEYS_URL)" || \
+		{ echo "error: download failed for $(OCR_KEYS)"; rm -f $(OCR_KEYS).part; exit 1; }; \
+		lines=$$(wc -l < $(OCR_KEYS).part | tr -d ' '); \
 		if [ "$$lines" -lt $(OCR_KEYS_MIN_LINES) ]; then \
-			echo "error: $(OCR_KEYS) only has $$lines lines (want >=18000) — download likely failed"; \
-			rm -f $(OCR_KEYS); \
+			echo "error: the download only has $$lines lines (want >=18000) — discarding the partial file"; \
+			rm -f $(OCR_KEYS).part; \
 			exit 1; \
 		fi; \
+		mv $(OCR_KEYS).part $(OCR_KEYS); \
 		echo "keys ok ($$lines lines)"; \
 	fi
 	@echo ""

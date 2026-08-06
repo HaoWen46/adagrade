@@ -218,7 +218,8 @@ Honest limits:
   to look at them to place them.
 
 The end-to-end test over the demo piles lives in `internal/offline/integration_test.go` and is
-skipped unless the three `ADAMARKER_OCR_*` variables are set.
+skipped unless all three of `ADAMARKER_OCR_MODEL`, `ADAMARKER_OCR_KEYS` and
+`ADAMARKER_ONNXRUNTIME` are set (the third does not match an `ADAMARKER_OCR_*` glob).
 
 ## Develop
 
