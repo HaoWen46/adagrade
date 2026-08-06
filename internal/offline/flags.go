@@ -338,6 +338,18 @@ func newOCRError(cause error, format string, a ...any) *OCRError {
 	return &OCRError{newOfflineErr(cause, format, a...)}
 }
 
+// NewOCRError is the one typed error a CALLER has to be able to mint.
+//
+// The local OCR engine is constructed outside this package on purpose — Run
+// takes the narrow latticeReader seam, so the pipeline's tests need no ONNX
+// runtime, no model file and no dictionary — which means "there is no local
+// reader at all" can only be detected by the command that was supposed to build
+// one. Every other typed error is minted by the stage that detects it and stays
+// unexported.
+func NewOCRError(cause error, format string, a ...any) *OCRError {
+	return newOCRError(cause, format, a...)
+}
+
 func newRegionsError(cause error, format string, a ...any) *RegionsError {
 	return &RegionsError{newOfflineErr(cause, format, a...)}
 }

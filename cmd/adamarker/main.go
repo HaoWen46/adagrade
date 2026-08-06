@@ -38,6 +38,15 @@ import (
 )
 
 func main() {
+	// Subcommand dispatch happens BEFORE any flag is defined or parsed:
+	// offline-grade owns its own FlagSet with its own names (offline.ParseArgs),
+	// and the server's flag.Parse would reject every one of them. Nothing else
+	// on the command line is intercepted — `adamarker -verify-blobs` and a bare
+	// `adamarker` fall straight through to the parsing below.
+	if isOfflineGrade(os.Args) {
+		os.Exit(runOfflineGrade(os.Args[2:]))
+	}
+
 	verifyBlobs := flag.Bool("verify-blobs", false, "check every blob reference in the DB against the blob store and exit (Task U3, docs/OPERATIONS.md); does not start the HTTP server or worker fleet")
 	flag.Parse()
 
