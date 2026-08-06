@@ -41,7 +41,10 @@ const (
 
 // reportedReasons is the order unmatched reasons are counted out in, so two
 // runs with the same outcome print the same line.
-var reportedReasons = []string{ReasonSurplus, ReasonLowScore, ReasonAmbiguous}
+// id-conflict comes last because it is the only one raised AFTER the solver has
+// spoken (match.go's vetoLegibleIDConflict), so the order still reads as the
+// order the run reaches them in.
+var reportedReasons = []string{ReasonSurplus, ReasonLowScore, ReasonAmbiguous, ReasonIDConflict}
 
 // cjkFontEnv names the bundled Traditional Chinese face. It is the same
 // variable the server reads for report attachments; here it reaches the
@@ -68,10 +71,12 @@ type Deps struct {
 
 // Summary is what the run did, in the terms an operator checks it in.
 //
-// Unmatched is keyed by reason (surplus, low-score, ambiguous) rather than
-// being a single total, because the three mean different things: surplus says
-// the batch has more pages than cells, low-score says the identity band was not
-// read, and ambiguous says two students explain the same page.
+// Unmatched is keyed by reason (surplus, low-score, ambiguous, id-conflict)
+// rather than being a single total, because the four mean different things:
+// surplus says the batch has more pages than cells, low-score says the identity
+// band was not read, ambiguous says two students explain the same page, and
+// id-conflict says the id box legibly reads somebody the assignment disagrees
+// with — the only one that indicts the match rather than the page.
 //
 // It is returned even when Run fails, so a caller can report how far the run
 // got. The counts describe stages that COMPLETED; a failure mid-stage leaves

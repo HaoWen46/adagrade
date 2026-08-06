@@ -600,3 +600,164 @@ func TestMatchPages_Errors(t *testing.T) {
 		}
 	})
 }
+
+// --- the legible-ID veto ---------------------------------------------------
+
+// vetoRoster is a roster with REAL-shaped ids: the veto's run-length gate is 5
+// characters, so fixtureRoster's four-character AB01 ids could never trip it and
+// would silently pass every case below.
+func vetoRoster(t *testing.T) []roster.Row {
+	t.Helper()
+	names := []string{"abc", "bca", "cab"}
+	rows := make([]roster.Row, len(names))
+	for i, name := range names {
+		rows[i] = roster.Row{
+			StudentID: fmt.Sprintf("B1190200%d", i+1),
+			Name:      name,
+			Email:     fmt.Sprintf("s%d@example.test", i+1),
+			Line:      i + 2,
+		}
+	}
+	return rows
+}
+
+// TestMatchPages_LegibleWrongIDVetoesTheAssignment is the off-roster veto.
+//
+// The setup is the hazard it exists for, and it is not hypothetical: the page's
+// NAME and PROBLEM boxes read student 1's decisively (0.30 + 0.25 of the weight),
+// so the solver assigns it to student 1 — while the id box legibly reads an id
+// that is nobody's. Closed-set scoring cannot object: posteriors normalize over
+// the roster, so "not on this roster" is not a hypothesis it can express, and
+// the assigned cell clears both --min-score and --min-margin comfortably.
+//
+// The gates are asserted one at a time because each one protects something
+// different: confidence keeps ugly handwriting from vetoing a correct lattice
+// match, run length keeps a "Q1" or a stray digit from counting as an id, and
+// distance >= 3 keeps a near-miss OCR of the RIGHT id (internal/scan's rungs
+// call <= 2 a near miss) from throwing away a page that matched correctly.
+func TestMatchPages_LegibleWrongIDVetoesTheAssignment(t *testing.T) {
+	rows := vetoRoster(t)
+
+	tests := []struct {
+		name       string
+		idLines    []localocr.LineLattice
+		wantStatus string
+		wantReason string
+		why        string
+	}{
+		{
+			name:       "legible id, three edits away",
+			idLines:    lines(textLine(t, "B99999999", 0.95)),
+			wantStatus: StatusUnmatched,
+			wantReason: ReasonIDConflict,
+			why:        "the id box legibly says somebody else",
+		},
+		{
+			name:       "same id, low confidence",
+			idLines:    lines(textLine(t, "B99999999", 0.60)),
+			wantStatus: StatusAuto,
+			why:        "a 0.60 read is a guess, and a guess must not veto the lattice",
+		},
+		{
+			name:       "near miss of the assigned id",
+			idLines:    lines(textLine(t, "B11902084", 0.95)),
+			wantStatus: StatusAuto,
+			why:        "two edits from B11902001 is a misread of it, not a different student",
+		},
+		{
+			name:       "short legible run",
+			idLines:    lines(textLine(t, "Q1", 0.95)),
+			wantStatus: StatusAuto,
+			why:        "four characters or fewer cannot identify anybody",
+		},
+		{
+			name:       "id field unread",
+			idLines:    nil,
+			wantStatus: StatusAuto,
+			why:        "nothing was read, so nothing can conflict",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			reads := []PageRead{{
+				Page: page(1),
+				ID: identity(
+					tc.idLines,
+					lines(textLine(t, rows[0].Name, 0.9)),
+					lines(textLine(t, "Q1", 0.9)),
+				),
+			}}
+
+			results, err := MatchPages(reads, rows, 1, matchCharset(), DefaultMinScore, DefaultMinMargin)
+			if err != nil {
+				t.Fatalf("MatchPages: %v", err)
+			}
+			got := results[0]
+			if got.Status != tc.wantStatus || got.Reason != tc.wantReason {
+				t.Fatalf("status/reason = %q/%q, want %q/%q (%s)", got.Status, got.Reason, tc.wantStatus, tc.wantReason, tc.why)
+			}
+			if tc.wantStatus == StatusUnmatched {
+				// A vetoed row names nobody, in memory as well as in the
+				// report: every downstream stage keys off these fields.
+				if got.StudentID != "" || got.StudentName != "" || got.Problem != 0 {
+					t.Errorf("a vetoed row still carries an assignment: %q/%q problem %d", got.StudentID, got.StudentName, got.Problem)
+				}
+				// The scores stay, because they are the evidence an operator
+				// needs to see: this page looked confident, and that is the point.
+				if got.Score <= 0 {
+					t.Errorf("score = %v, want the vetoed cell's score kept for the report", got.Score)
+				}
+				return
+			}
+			if got.StudentID != rows[0].StudentID {
+				t.Errorf("assigned %q, want %q (%s)", got.StudentID, rows[0].StudentID, tc.why)
+			}
+		})
+	}
+}
+
+// TestLongestIDRun covers the extraction the veto reads its id out of. Band mode
+// is the reason it exists: with --id-band the "student_id" field is the whole
+// top strip, so the line the veto inspects carries the name and the problem
+// label too.
+func TestLongestIDRun(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"B11902001", "B11902001"},
+		{"b11902001", "B11902001"},            // uppercased, like studentid.Normalize
+		{"Ｂ１１９０２００１", "B11902001"},             // NFKC: full-width reads as ASCII
+		{"B11902001 abc Q1", "B11902001"},     // band mode: the whole header strip
+		{"座號 B11902001 姓名 王小明", "B11902001"}, // CJK ends a run rather than joining it
+		{"B-1190-2001", "1190"},               // punctuation ends a run too
+		{"Q1", "Q1"},                          // too short for the veto, but still the run
+		{"", ""},
+		{"王小明", ""},                 // a name alone yields no run
+		{"12 B119020011", "B119020011"}, // the LONGEST run, not the first
+	}
+	for _, tc := range tests {
+		if got := longestIDRun(tc.in); got != tc.want {
+			t.Errorf("longestIDRun(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestLevenshtein pins the local copy against the distances the veto's threshold
+// is stated in.
+func TestLevenshtein(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"B11902001", "B11902001", 0},
+		{"B11902001", "B11902081", 1}, // one substitution: a misread digit
+		{"B11902001", "B11902084", 2}, // two: still a near miss
+		{"B11902001", "B99999999", 7}, // a different identity
+		{"B11902001", "", 9},
+		{"", "", 0},
+		{"丁一心", "丁一忄", 1}, // runes, not bytes
+	}
+	for _, tc := range tests {
+		if got := levenshtein(tc.a, tc.b); got != tc.want {
+			t.Errorf("levenshtein(%q, %q) = %d, want %d", tc.a, tc.b, got, tc.want)
+		}
+	}
+}

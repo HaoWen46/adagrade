@@ -141,6 +141,31 @@ const demoIDRegionsJSON = `{"version":1,"regions":[
   {"kind":"problem_id","x":0.65,"y":0.02,"w":0.25,"h":0.06,"padding":0.01}
 ]}`
 
+// THE NAME CHANNEL IS DEAD ON THESE FIXTURES, and every expectation below is
+// written knowing it.
+//
+// make-demo-data.py draws the names with reportlab's STSong-Light CID font,
+// which the PDF REFERENCES but does not embed — a CJK viewer is expected to
+// supply it. PDFium (this repo's wazero build, no CJK font pack) has nothing to
+// substitute, so the name box rasterizes EMPTY while the ASCII ids and "Q<n>"
+// labels in the other two boxes render fine. Look at crops/pNNNN-name.jpg from
+// any run: an empty rectangle.
+//
+// Consequences, all visible in the reports these tests read:
+//
+//   - score_name is 0.000000 on every page of both piles, so the observed score
+//     ceiling is WeightStudentID + WeightProblem = 0.45 + 0.25 = 0.70 (matched
+//     pages here land at 0.689–0.699), not 1.0.
+//   - a page whose id box cannot be read has only its problem number left, which
+//     caps it at 0.25 and cannot clear --min-margin against a class of ten. The
+//     messy pile's two unreadable-id pages are therefore unmatched HERE for that
+//     reason — not because the design refuses to match on a name.
+//   - the 0.30 name weight is exercised by unit tests only (match_test.go,
+//     score_test.go). Nothing in this file demonstrates that name matching works
+//     end to end against the real recognizer, and no assertion below depends on
+//     it. Fixing that needs either a CJK font in the renderer or fixtures drawn
+//     with an embedded font — a fixture change, out of scope here.
+
 // Fixture paths, relative to this package directory.
 const (
 	demoRosterPath    = "../../data/demo/demo-roster.csv"
@@ -265,6 +290,14 @@ func readMatchReport(t *testing.T, out string) []reportRow {
 	col := map[string]int{}
 	for i, name := range records[0] {
 		col[name] = i
+	}
+	// Indexing by name is only rename-protection if a missing name is a
+	// FAILURE: an absent key reads as column 0 (the page number), which would
+	// quietly turn every assertion below into a comparison against page indices.
+	for _, name := range []string{"page", "student_id", "problem", "score", "margin", "status", "reason"} {
+		if _, ok := col[name]; !ok {
+			t.Fatalf("match-report.csv has no %q column; its header is %v — a column was renamed or dropped", name, records[0])
+		}
 	}
 	num := func(rec []string, name string) float64 {
 		v, err := strconv.ParseFloat(rec[col[name]], 64)
@@ -463,14 +496,24 @@ func TestIntegration_CleanPileMatchesEveryPageToItsPrintedIdentity(t *testing.T)
 //   - a cell that some page actually prints is won by one of the pages that
 //     print it, so no interloper displaces a real page;
 //   - the blank page, which carries no ink in any box, is not assigned to
-//     anybody.
+//     anybody;
+//   - the off-roster B99999999 page is vetoed, with reason id-conflict.
 //
-// The pages with NO correct answer — the scribbled id, the empty id, the
-// off-roster B99999999 — are logged rather than pinned, because "unmatched" is
-// not the design's promise for them: a forced matcher is allowed to place a page
-// on the strength of a name and a problem number, and it is allowed to be wrong
-// about a student who is not on the roster at all. That is the hazard the banner
-// and the README name, and the assertions above are the ones that bound it.
+// The off-roster page is pinned because a rule now covers it: its id box reads
+// legibly (~0.99 greedy confidence on this fixture) and is seven edits from any
+// roster id, so match.go's vetoLegibleIDConflict demotes it however confident
+// the closed-set posterior was. Before that veto it matched at score 0.697 with
+// a margin of 0.450 — which is the observation the veto exists because of.
+//
+// The two UNREADABLE-id pages stay unpinned (logged, and bounded by the
+// cross-student rule): "unmatched" is not the design's promise for them. A
+// forced matcher may legitimately place a page on its name and problem number
+// alone. That it does not happen here is an artifact of these fixtures rather
+// than a rule — the name box rasterizes blank under PDFium (see the note above
+// the fixture paths), so those pages have only a 0.25 problem term left and
+// cannot clear the margin. On fixtures whose names actually render, matching
+// them WOULD be correct behaviour, and an "unmatched" assertion would then fail
+// for the wrong reason.
 func TestIntegration_MessyPileHandlesTheEdgePaths(t *testing.T) {
 	deps := integrationDeps(t)
 
@@ -536,6 +579,30 @@ func TestIntegration_MessyPileHandlesTheEdgePaths(t *testing.T) {
 		}
 		if row.Score != 0 {
 			t.Errorf("blank page %d scored %.6f, want exactly 0: no field can be read off it", row.Page, row.Score)
+		}
+	}
+
+	// The off-roster page: a legible id belonging to nobody on this roster. The
+	// closed-set posterior cannot express "nobody" — it normalizes over the
+	// roster and lands on the nearest id, confidently — so the veto is the only
+	// thing standing between this page and somebody else's grade.
+	for _, row := range rows {
+		if messyPileTruth[row.Page].IDBox != idOffRoster {
+			continue
+		}
+		if row.matched() {
+			t.Errorf("page %d carries an id on no roster and was assigned to a student anyway (status %s, score %.4f, margin %.4f): the legible-id veto did not fire",
+				row.Page, row.Status, row.Score, row.Margin)
+			continue
+		}
+		if row.Reason != ReasonIDConflict {
+			t.Errorf("page %d was set aside for %q, want %q: it was rejected for the wrong reason, which is a different bug than the one the veto fixes",
+				row.Page, row.Reason, ReasonIDConflict)
+		}
+		// The evidence stays on the row: this page looked confident, and the
+		// operator has to be able to see that it did.
+		if row.Score <= DefaultMinScore {
+			t.Errorf("page %d scored %.4f: the veto should be demoting a page that CLEARED the thresholds", row.Page, row.Score)
 		}
 	}
 

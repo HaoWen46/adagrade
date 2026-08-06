@@ -170,6 +170,10 @@ bundle/{exam}-pN/   the professor's export: MANIFEST.csv, tex/, typ/, images/, _
 Before trusting a single line of output, open **`match-report.csv`** (sort by `status`:
 `forced` rows are the ones the solver moved off the page's own best guess) and
 **`masked-preview.jpg`** (if identity is still visible there, it was still visible to the API).
+Unmatched rows carry a `reason`: `surplus` (more pages than roster×problem cells), `low-score`
+(nothing on the page could be read), `ambiguous` (another student explains it nearly as well),
+or `id-conflict` (the ID box legibly reads an ID that is not the assigned student's — three or
+more edits away — so the assignment was vetoed however confident it looked).
 
 | Exit | Meaning |
 |---|---|
@@ -187,15 +191,22 @@ Before trusting a single line of output, open **`match-report.csv`** (sort by `s
 Honest limits:
 
 - **Wrong-student assignments are possible by design.** A forced matcher has no "I don't
-  know" for a page it can score, and a page whose printed id is on nobody's roster still
-  lands on *somebody*. Review the `forced` rows, and don't hand out grades from a run
-  nobody read the report of.
+  know" for a page it can score: scores are posteriors over *this roster*, so "not on it"
+  is not a hypothesis the matcher can hold. One case is caught — a page whose ID box
+  *legibly* reads a different ID (≥ 5 characters, ≥ 0.90 recognizer confidence, ≥ 3 edits
+  from the assigned student) is vetoed as `id-conflict` — but an ID that is smudged,
+  cropped, or misread into a near-miss is not, and neither is a page identified purely on
+  its name. Review the `forced` rows, and don't hand out grades from a run nobody read the
+  report of.
 - The `--min-score` / `--min-margin` defaults (0.15 / 0.03) are tuned on the synthetic,
   *printed* demo fixtures in `data/demo/`, not on real handwriting. Real scans are worse.
   Raise them to set more aside; lower them to place more, and read every row.
 - Matching leans on the student-ID box (weight 0.45, against name 0.30 and problem 0.25,
   never renormalized). When the id box is unreadable, a name and a problem number alone
-  rarely clear the margin against a full class — those pages land in `unmatched/`.
+  rarely clear the margin against a full class — those pages land in `unmatched/`. The
+  name channel is also the least exercised end to end: the committed `data/demo/` PDFs
+  reference a CJK font they do not embed, so their name boxes render blank under this
+  renderer and the 0.30 name term is covered by unit tests only.
 - Pages set aside are never sent to the API and never appear in the bundle; they are copied
   into `unmatched/` as the *original* (unmasked) page, because a human on this machine has
   to look at them to place them.

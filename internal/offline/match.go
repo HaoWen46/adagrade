@@ -48,9 +48,28 @@ const (
 	StatusForced    = "forced"    // the global assignment moved this page off its best guess
 	StatusUnmatched = "unmatched" // set aside; see Reason
 
-	ReasonSurplus   = "surplus"   // no cell left: more pages than roster×problems slots
-	ReasonLowScore  = "low-score" // the assigned cell scored below --min-score
-	ReasonAmbiguous = "ambiguous" // another STUDENT scored within --min-margin
+	ReasonSurplus    = "surplus"     // no cell left: more pages than roster×problems slots
+	ReasonLowScore   = "low-score"   // the assigned cell scored below --min-score
+	ReasonAmbiguous  = "ambiguous"   // another STUDENT scored within --min-margin
+	ReasonIDConflict = "id-conflict" // the id crop LEGIBLY reads a different student's id
+)
+
+// The legible-ID veto's three gates. See vetoLegibleIDConflict.
+const (
+	// idVetoMinRunLength: fewer than five characters cannot identify anybody.
+	// "Q1", a stray page number and a two-digit seat number all read as short
+	// runs, and vetoing on them would throw away correctly matched pages.
+	idVetoMinRunLength = 5
+	// idVetoMinConfidence: the greedy decode has to be a READING, not a guess.
+	// Handwriting that the recognizer is unsure of is exactly what the lattice
+	// scorer is better at than greedy decoding, so a low-confidence line must
+	// never be allowed to overrule it.
+	idVetoMinConfidence = 0.90
+	// idVetoMinDistance mirrors internal/scan's proposal rungs, where an edit
+	// distance of 1 or 2 from a roster id is a NEAR MISS of that id (a misread
+	// digit) and 3 is a different identity. Below this, vetoing would discard
+	// pages whose id was simply read imperfectly.
+	idVetoMinDistance = 3
 )
 
 // PageRead pairs a rendered page with what the local OCR read off it. It is the
@@ -227,8 +246,132 @@ func MatchPages(pages []PageRead, rows []roster.Row, problems int, cs localocr.C
 	results := make([]MatchResult, len(pages))
 	for p, pr := range pages {
 		results[p] = classify(pr, scores[p], argmax[p], solution[p], rows, problems, minScore, minMargin)
+		vetoLegibleIDConflict(&results[p], pr.ID.Fields[KindStudentID])
 	}
 	return results, nil
+}
+
+// vetoLegibleIDConflict demotes a matched page whose identity crop LEGIBLY reads
+// an id that is not the assigned student's.
+//
+// It exists because closed-set scoring cannot say "nobody". Every posterior is
+// normalized over the roster, so a page carrying an id that belongs to no
+// student on it — a visiting student, a different section's sheet, a typo'd
+// self-written id — still concentrates its mass on whichever roster id is
+// nearest, and comes out looking as confident as a true match. Neither
+// --min-score nor --min-margin can catch that: both measure the assigned cell
+// against the OTHER CELLS, and the whole field is wrong together. The observed
+// case is the demo pile's B99999999 page, which matched at score 0.697 with a
+// margin of 0.450 against a student it has nothing to do with.
+//
+// The check is deliberately not part of the scoring: it uses the greedy decode
+// (LineLattice.Text), which is a different, independent view of the same pixels
+// — the lattice says "which roster entry best explains these strokes", the
+// greedy decode says "what do these strokes actually spell". A conflict between
+// the two is the signal, and folding it into the score would destroy it.
+//
+// All three gates must fire, and each guards a different false positive; see the
+// idVeto* constants. A vetoed row names NOBODY afterwards (every later stage
+// keys off Status and StudentID), but keeps its scores, because "this page
+// looked confident and was thrown away anyway" is precisely what the operator
+// has to see in the report.
+func vetoLegibleIDConflict(res *MatchResult, f FieldLattices) {
+	if res.Status == StatusUnmatched || res.StudentID == "" {
+		return
+	}
+	line, ok := bestConfidenceLine(f.Lines)
+	if !ok || line.Confidence < idVetoMinConfidence {
+		return
+	}
+	read := longestIDRun(line.Text)
+	if len([]rune(read)) < idVetoMinRunLength {
+		return
+	}
+	if levenshtein(read, studentid.Normalize(res.StudentID)) < idVetoMinDistance {
+		return
+	}
+	res.Status, res.Reason = StatusUnmatched, ReasonIDConflict
+	res.StudentID, res.StudentName, res.Problem = "", "", 0
+}
+
+// bestConfidenceLine is the line the veto reads, and it is the most confident
+// one rather than the first: a crop of a header box often splits into the
+// printed label and the written value, and only one of them is an id.
+func bestConfidenceLine(lines []localocr.LineLattice) (localocr.LineLattice, bool) {
+	best, found := localocr.LineLattice{}, false
+	for _, l := range lines {
+		if !found || l.Confidence > best.Confidence {
+			best, found = l, true
+		}
+	}
+	return best, found
+}
+
+// longestIDRun returns the longest run of ASCII letters and digits in s, under
+// studentid.Normalize's folding rules: NFKC first (so a full-width Ｂ１１ reads
+// as B11) and uppercased.
+//
+// It applies those rules per rune rather than calling Normalize, and that is the
+// whole point of the function: Normalize DELETES separators, which would fuse a
+// whole header strip into one run — "B11902001 abc Q1" becomes "B11902001ABCQ1",
+// an id that matches nobody at any distance and would veto every band-mode page.
+// Here a space, a punctuation mark or a Chinese character ENDS a run instead.
+// That matters because the field being read is not always just an id: with
+// --id-band the "student_id" field is the entire top strip, and even a drawn box
+// crop picks up its printed label.
+func longestIDRun(s string) string {
+	best, run := []rune(nil), []rune(nil)
+	flush := func() {
+		if len(run) > len(best) {
+			best = run
+		}
+		run = nil
+	}
+	for _, r := range norm.NFKC.String(s) {
+		u := unicode.ToUpper(r)
+		if (u >= 'A' && u <= 'Z') || (u >= '0' && u <= '9') {
+			run = append(run, u)
+			continue
+		}
+		flush()
+	}
+	flush()
+	return string(best)
+}
+
+// levenshtein returns the edit distance between a and b, counted over RUNES so
+// a multi-byte character is one edit.
+//
+// It is a local copy of internal/scan/match.go's function rather than a shared
+// one: that package's is unexported, and importing internal/scan here would drag
+// the whole scan service — its store, its queue, its database — into a mode
+// whose entire premise is that there is no database. Twenty lines of textbook
+// dynamic programming is the cheaper dependency.
+func levenshtein(a, b string) int {
+	ra, rb := []rune(a), []rune(b)
+	if len(ra) == 0 {
+		return len(rb)
+	}
+	if len(rb) == 0 {
+		return len(ra)
+	}
+	prev := make([]int, len(rb)+1)
+	curr := make([]int, len(rb)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ra); i++ {
+		curr[0] = i
+		for j := 1; j <= len(rb); j++ {
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			curr[j] = min(min(prev[j]+1, curr[j-1]+1), prev[j-1]+cost)
+		}
+		prev, curr = curr, prev
+	}
+	return prev[len(rb)]
 }
 
 // classify turns one page's cell scores and the solver's verdict into a result

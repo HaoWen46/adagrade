@@ -159,7 +159,7 @@ func TestLoadRosterErrorsNameLinesNotStudents(t *testing.T) {
 	for _, want := range []string{
 		"line 3: duplicate student_id (see line 2)",
 		"line 4: student_id collides with an earlier row after normalization",
-		"line 4: ", "(see line 2)",
+		"(see line 2)", // the conflicting line survives redaction: it is the actionable half
 		"line 5: duplicate email",
 		"line 6: empty name",
 		"line 7: invalid email",
