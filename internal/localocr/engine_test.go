@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -183,6 +185,58 @@ func TestValidateClassCount_ErrorMessageShape(t *testing.T) {
 	want := `localocr: model "m.onnx" outputs 50 classes but keys file "k.txt" has 9 entries (want 10 or 11)`
 	if err.Error() != want {
 		t.Errorf("error message:\ngot:  %s\nwant: %s", err.Error(), want)
+	}
+}
+
+// TestValidateClassCount_PPOCRv5Arithmetic pins the exact numbers the shipped
+// asset pair produces, so a future keys-file or model swap that silently
+// changes the charset trips here instead of at a user's first scan.
+// ppocrv5_dict.txt has 18,383 entries; the PP-OCRv5 server rec export emits
+// 18,385 classes (18383 + blank + trailing space), which is the trailingSpace
+// path. 18,384 (blank only) stays acceptable for a re-export without the space
+// class; anything else is a hard error naming both counts.
+func TestValidateClassCount_PPOCRv5Arithmetic(t *testing.T) {
+	const (
+		v5Keys  = 18383 // wc -l ppocrv5_dict.txt
+		model   = "data/ocr/PP-OCRv5_server_rec_infer.onnx"
+		keyfile = "data/ocr/ppocrv5_dict.txt"
+	)
+
+	t.Run("18385 classes accepted with trailing space", func(t *testing.T) {
+		trailingSpace, err := validateClassCount(v5Keys+2, v5Keys, model, keyfile)
+		if err != nil {
+			t.Fatalf("validateClassCount(%d, %d): unexpected error: %v", v5Keys+2, v5Keys, err)
+		}
+		if !trailingSpace {
+			t.Errorf("trailingSpace: got false, want true for %d classes over %d keys", v5Keys+2, v5Keys)
+		}
+	})
+
+	t.Run("18384 classes accepted without trailing space", func(t *testing.T) {
+		trailingSpace, err := validateClassCount(v5Keys+1, v5Keys, model, keyfile)
+		if err != nil {
+			t.Fatalf("validateClassCount(%d, %d): unexpected error: %v", v5Keys+1, v5Keys, err)
+		}
+		if trailingSpace {
+			t.Errorf("trailingSpace: got true, want false for %d classes over %d keys", v5Keys+1, v5Keys)
+		}
+	})
+
+	for _, bad := range []int{v5Keys + 3, v5Keys - 1} {
+		t.Run(fmt.Sprintf("%d classes rejected", bad), func(t *testing.T) {
+			_, err := validateClassCount(bad, v5Keys, model, keyfile)
+			if err == nil {
+				t.Fatalf("validateClassCount(%d, %d): want error, got nil", bad, v5Keys)
+			}
+			// The message must name BOTH numbers so an operator can tell at a
+			// glance which of the two assets is the odd one out.
+			msg := err.Error()
+			for _, want := range []string{strconv.Itoa(bad), strconv.Itoa(v5Keys), model, keyfile} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("error should mention %q; got: %v", want, err)
+				}
+			}
+		})
 	}
 }
 

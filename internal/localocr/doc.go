@@ -1,6 +1,6 @@
 // Package localocr is the fully-offline implementation of the ocr.Reader seam
 // (docs/DECISIONS.md D24): it reads student-ID + Chinese-name text lines from a
-// tight imaging.IDCrop using an embedded PP-OCR recognition model over
+// tight imaging.IDCrop using a locally-provisioned PP-OCR recognition model over
 // onnxruntime, with no network call and no student identity ever leaving the
 // machine.
 //
@@ -9,7 +9,8 @@
 // holding 1–3 short lines, so line boundaries are recovered in pure Go by a
 // horizontal ink-density projection (split.go) rather than a learned detector.
 // Each band is preprocessed to the model's fixed height (preprocess.go), run
-// through the ch_PP-OCRv4 mobile recognizer, and CTC-decoded greedily (ctc.go).
+// through the PP-OCRv5 server recognizer (18,383-glyph charset covering
+// Traditional Chinese), and CTC-decoded greedily (ctc.go).
 //
 // The numeric dependency (github.com/yalue/onnxruntime_go, which dlopens a
 // libonnxruntime shared library) is isolated to engine.go so the whole package

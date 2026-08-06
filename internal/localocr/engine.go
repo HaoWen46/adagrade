@@ -17,21 +17,29 @@ import (
 	"github.com/HaoWen46/adagrade/internal/ocr"
 )
 
-// Recognizer input geometry (docs/DECISIONS.md D24). The ch_PP-OCRv4 mobile rec
-// model takes NCHW [1,3,H,W]; H is fixed at 48 and W varies per line (dynamic
-// axis), which is why the Engine uses a DynamicAdvancedSession.
+// Recognizer input geometry (docs/DECISIONS.md D24). The PP-OCR rec models take
+// NCHW [1,3,H,W]; H is fixed at 48 and W varies per line (dynamic axis), which
+// is why the Engine uses a DynamicAdvancedSession. The geometry is the same for
+// the v4 mobile and v5 server exports.
+//
+// recMaxW is 1280 rather than the v4-era 640: PP-OCRv5 rec trains at W=320 with
+// a dynamic width admitting up to 3200, and the identity bands this package
+// feeds it are cropped from pages rendered at ~2200px on the long edge, so a
+// full-width line truncates at 640 — losing the tail of exactly the long
+// ID+name strings that matter. Doubling the cap doubles T (the CTC time steps),
+// a cost the K=64 lattice compression absorbs downstream.
 const (
-	recHeight = 48  // model input height
-	recMaxW   = 640 // cap on per-line width
-	recMinW   = 16  // pad narrower lines up to this floor
+	recHeight = 48   // model input height
+	recMaxW   = 1280 // cap on per-line width
+	recMinW   = 16   // pad narrower lines up to this floor
 )
 
 // Config points the Engine at its three on-disk dependencies. All are required;
-// none are embedded so the ~11MB model and the shared library stay out of the
-// binary and the repo (assets are provisioned separately).
+// none are embedded so the ~85MB model and the shared library stay out of the
+// binary and the repo (assets are provisioned separately by `make ocr-models`).
 type Config struct {
-	ModelPath          string // ch_PP-OCRv4_rec_infer.onnx
-	KeysPath           string // ppocr_keys_v1.txt (one glyph per line)
+	ModelPath          string // PP-OCRv5_server_rec_infer.onnx
+	KeysPath           string // ppocrv5_dict.txt (one glyph per line)
 	ONNXRuntimeLibPath string // libonnxruntime.{so,dylib,dll}
 }
 
@@ -111,9 +119,12 @@ func New(cfg Config) (*Engine, error) {
 		return nil, err
 	}
 
-	// The PP-OCRv4 rec export names its input "x" and its (softmaxed) output
-	// "softmax_11.tmp_0"; discover them from metadata so we do not hard-code a
-	// name that a re-export might change.
+	// PP-OCR rec exports name their input "x", but the output name and its
+	// scale differ per release: v4 ended in a Softmax node ("softmax_11.tmp_0",
+	// probabilities), while the v5 server export has no terminal softmax and
+	// emits raw logits. Both are handled downstream by looksSoftmaxed, and the
+	// names are discovered from metadata rather than hard-coded so a re-export
+	// cannot silently break the session.
 	inName, outName, outClasses, err := modelIO(cfg.ModelPath)
 	if err != nil {
 		return nil, err
@@ -365,8 +376,9 @@ func outputToRows(v ort.Value) ([][]float32, error) {
 }
 
 // modelIO reads the model's single input/output names and, when statically
-// known, the output's trailing class dimension. Falls back to the PP-OCRv4
-// default names when metadata is unavailable.
+// known, the output's trailing class dimension. There is no hard-coded name
+// fallback for any release: unreadable metadata is an error, because guessing a
+// name that a re-export changed would fail later and far less legibly.
 func modelIO(path string) (inName, outName string, outClasses int, err error) {
 	ins, outs, e := ort.GetInputOutputInfo(path)
 	if e != nil {
