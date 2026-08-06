@@ -118,6 +118,13 @@ type Lattice struct {
 // A timestep outside [0, T) or a negative class is a programmer error and
 // panics: those cannot come from a scorer walking a real candidate, and
 // returning a plausible number instead would hide the bug in a score.
+//
+// The two forms are deliberately asymmetric about a class ABOVE the class
+// axis: the dense form knows C and panics, while the sparse form does not
+// retain C (only the kept classes and the floor) and so cannot tell "class
+// 9999 of 6625" apart from "a class that missed the cut" — it returns the
+// floor. Callers must take classes from Charset.Class rather than inventing
+// indices; a class the dictionary does not contain has no lattice meaning.
 func (l Lattice) LogProbAt(t, class int) float64 {
 	if t < 0 || t >= l.T || class < 0 {
 		panic(fmt.Sprintf("localocr: Lattice.LogProbAt(t=%d, class=%d) out of range (T=%d)", t, class, l.T))

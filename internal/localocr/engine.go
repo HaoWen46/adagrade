@@ -217,14 +217,11 @@ func (e *Engine) closed() bool {
 // logs the crop or the recognized text (D14 PII). The returned lines are in
 // top-to-bottom order; empty recognitions are skipped.
 func (e *Engine) ReadLines(ctx context.Context, crop imaging.IDCrop) ([]ocr.Line, error) {
-	if crop.IsZero() {
-		return nil, fmt.Errorf("localocr: empty IDCrop")
-	}
-	src, err := jpeg.Decode(bytes.NewReader(crop.JPEG()))
+	gray, err := cropGray(crop)
 	if err != nil {
-		return nil, fmt.Errorf("localocr: decode crop JPEG: %w", err)
+		return nil, err
 	}
-	return readLinesRetry(ctx, toGray(src), e.recognize)
+	return readLinesRetry(ctx, gray, e.recognize)
 }
 
 // ReadLattices is ReadLines with the model's per-timestep class distribution
@@ -234,6 +231,19 @@ func (e *Engine) ReadLines(ctx context.Context, crop imaging.IDCrop) ([]ocr.Line
 // pixels the reported text came from. Low-confidence lines are returned like
 // any other (with their lattices); the caller decides what to do with them.
 func (e *Engine) ReadLattices(ctx context.Context, crop imaging.IDCrop) ([]LineLattice, error) {
+	gray, err := cropGray(crop)
+	if err != nil {
+		return nil, err
+	}
+	return retryLadder(ctx, gray, func(ctx context.Context, g *image.Gray) ([]LineLattice, error) {
+		return readBandsWith(ctx, g, e.recognizeLattice)
+	}, bestLatticeConfidence)
+}
+
+// cropGray is the entry gate both read paths share: reject an empty crop,
+// decode the sealed JPEG, and hand the band splitter a grayscale image. The
+// two failures name mechanism only, never crop content (D14 PII).
+func cropGray(crop imaging.IDCrop) (*image.Gray, error) {
 	if crop.IsZero() {
 		return nil, fmt.Errorf("localocr: empty IDCrop")
 	}
@@ -241,9 +251,7 @@ func (e *Engine) ReadLattices(ctx context.Context, crop imaging.IDCrop) ([]LineL
 	if err != nil {
 		return nil, fmt.Errorf("localocr: decode crop JPEG: %w", err)
 	}
-	return retryLadder(ctx, toGray(src), func(ctx context.Context, g *image.Gray) ([]LineLattice, error) {
-		return readBandsWith(ctx, g, e.recognizeLattice)
-	}, bestLatticeConfidence)
+	return toGray(src), nil
 }
 
 // recognize runs one line-band image through preprocess -> session -> CTC.
@@ -323,9 +331,17 @@ func (e *Engine) runLine(img image.Image) ([][]float32, error) {
 }
 
 // outputToRows reshapes a [1, T, C] float32 output Value into a [T][C] matrix.
-// The data is COPIED out of the tensor: the returned rows outlive the ort.Value
-// (runLine Destroys it before returning), and slicing the native buffer would
-// leave the caller reading freed memory.
+//
+// The rows alias the tensor's data and MAY outlive it: runLine passes a nil
+// output to Run, so onnxruntime_go auto-allocates it and hands back a tensor
+// whose buffer it has already copied into Go-managed memory
+// (onnxruntime_go.go:3071-3080 -> createTensorFromOrtValue:2886-2941 ->
+// createTensorWithCData:2800-2807, which does `dataCopy := make([]T, ...);
+// copy(dataCopy, actualData)`). Tensor.Destroy (:683-690) releases the
+// OrtValue wrapping that Go buffer and nils the struct's fields; the array
+// itself stays alive for as long as these rows reference it. Copying here
+// again would cost an extra T*C float32 allocation per line per pass on the
+// identify path for nothing.
 func outputToRows(v ort.Value) ([][]float32, error) {
 	t, ok := v.(*ort.Tensor[float32])
 	if !ok {
@@ -341,11 +357,9 @@ func outputToRows(v ort.Value) ([][]float32, error) {
 	if len(flat) < T*C {
 		return nil, fmt.Errorf("localocr: output data too short: have %d want %d", len(flat), T*C)
 	}
-	buf := make([]float32, T*C)
-	copy(buf, flat[:T*C])
 	rows := make([][]float32, T)
 	for i := 0; i < T; i++ {
-		rows[i] = buf[i*C : (i+1)*C : (i+1)*C]
+		rows[i] = flat[i*C : (i+1)*C]
 	}
 	return rows, nil
 }
