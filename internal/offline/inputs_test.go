@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/HaoWen46/adagrade/internal/roster"
 )
 
 // Synthetic identities only — never real roster data (D14).
@@ -103,6 +105,106 @@ func TestLoadRosterFailures(t *testing.T) {
 				t.Errorf("ExitCode = %d, want %d", got, ExitRoster)
 			}
 		})
+	}
+}
+
+// rosterWithEveryIdentityBearingErrorCSV trips every roster.ParseError variant
+// that embeds a cell value. Line numbers are 1-based INCLUDING the header, the
+// way roster.Parse counts them:
+//
+//	line 3: duplicate student_id (first at line 2)
+//	line 4: full-width id colliding with line 2 under studentid.Normalize
+//	line 5: shares line 2's email address
+//	line 6: empty name
+//	line 7: invalid email (no @)
+//
+// Synthetic identities only (D14).
+const rosterWithEveryIdentityBearingErrorCSV = "student_id,name,email\n" +
+	"B11902001,丁一心,b11902001@example.edu\n" +
+	"B11902001,王二明,b11902099@example.edu\n" +
+	"Ｂ１１９０２００１,王二明,b11902098@example.edu\n" +
+	"B11902002,李三多,b11902001@example.edu\n" +
+	"B11902003,,b11902003@example.edu\n" +
+	"B11902004,趙四維,b11902004.example.edu\n"
+
+// TestLoadRosterErrorsNameLinesNotStudents — LoadRoster's message goes to a
+// terminal, into scrollback and into pasted bug reports, and CLAUDE.md forbids
+// student ids there. roster.ParseError's own contract allows the id (D14: the
+// server shows those messages back to the importing TA), so the redaction has
+// to happen HERE, at the boundary where the message becomes console output.
+func TestLoadRosterErrorsNameLinesNotStudents(t *testing.T) {
+	path := writeFile(t, t.TempDir(), "mistakes.csv", rosterWithEveryIdentityBearingErrorCSV)
+
+	rows, err := LoadRoster(path)
+	if rows != nil {
+		t.Errorf("rows = %v, want nil on failure", rows)
+	}
+	assertErrorType[*RosterError](t, err)
+	msg := err.Error()
+
+	// Not one cell value from the file, in any spelling that appears in it.
+	for _, secret := range []string{
+		"B11902001", "B11902002", "B11902003", "B11902004",
+		"Ｂ１１９０２００１",
+		"丁一心", "王二明", "李三多", "趙四維",
+		"b11902001@example.edu", "b11902099@example.edu",
+	} {
+		if strings.Contains(msg, secret) {
+			t.Errorf("the roster error quotes %q from the CSV:\n%s", secret, msg)
+		}
+	}
+
+	// Still actionable: every bad line is named, with the KIND of problem and
+	// the earlier line it conflicts with.
+	for _, want := range []string{
+		"line 3: duplicate student_id (see line 2)",
+		"line 4: student_id collides with an earlier row after normalization",
+		"line 4: ", "(see line 2)",
+		"line 5: duplicate email",
+		"line 6: empty name",
+		"line 7: invalid email",
+		path,
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the roster error does not mention %q:\n%s", want, msg)
+		}
+	}
+}
+
+// TestLoadRosterKeepsContentFreeMessagesVerbatim — the messages that carry no
+// cell value at all ARE the remedy (the Excel "CSV UTF-8" instruction, the list
+// of missing columns), so redaction must not blunt them.
+func TestLoadRosterKeepsContentFreeMessagesVerbatim(t *testing.T) {
+	dir := t.TempDir()
+	tests := []struct {
+		name, body string
+		want       []string
+	}{
+		{"missing columns", "id,who\nB11902001,x\n", []string{"line 1: missing required column(s): student_id, name, email"}},
+		{"empty student_id", "student_id,name,email\n,丁一心,a@example.edu\n", []string{"line 2: empty student_id"}},
+		{"not utf-8", "student_id,name,email\nB11902001,\xb1\xda,a@example.edu\n", []string{"line 2: file is not valid UTF-8", "CSV UTF-8"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeFile(t, dir, tc.name+".csv", tc.body)
+			_, err := LoadRoster(path)
+			assertErrorType[*RosterError](t, err, tc.want...)
+		})
+	}
+}
+
+// TestRedactedRosterMessageWithholdsUnknownShapes — the redaction is an
+// ALLOWLIST, so a message roster grows tomorrow is withheld rather than printed
+// on the assumption that it carries nothing identifying.
+func TestRedactedRosterMessageWithholdsUnknownShapes(t *testing.T) {
+	got := redactedRosterMessage(roster.ParseError{Line: 9, Msg: "student_id B11902001 has a suspicious email domain example.edu"})
+	for _, secret := range []string{"B11902001", "example.edu", "suspicious"} {
+		if strings.Contains(got, secret) {
+			t.Errorf("an unrecognized roster message was echoed (%q leaked): %q", secret, got)
+		}
+	}
+	if !strings.Contains(got, "line 9") {
+		t.Errorf("a withheld message must still name its line: %q", got)
 	}
 }
 
