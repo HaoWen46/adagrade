@@ -193,11 +193,17 @@ Honest limits:
 - **Wrong-student assignments are possible by design.** A forced matcher has no "I don't
   know" for a page it can score: scores are posteriors over *this roster*, so "not on it"
   is not a hypothesis the matcher can hold. One case is caught — a page whose ID box
-  *legibly* reads a different ID (≥ 5 characters, ≥ 0.90 recognizer confidence, ≥ 3 edits
-  from the assigned student) is vetoed as `id-conflict` — but an ID that is smudged,
+  *legibly* reads a different ID (a run of ≥ 5 characters **containing a digit**, at
+  ≥ 0.90 recognizer confidence, ≥ 3 edits from the assigned student, with no other
+  qualifying line agreeing) is vetoed as `id-conflict` — but an ID that is smudged,
   cropped, or misread into a near-miss is not, and neither is a page identified purely on
   its name. Review the `forced` rows, and don't hand out grades from a run nobody read the
   report of.
+- **Draw `--id-regions` around the handwritten value, not the printed label.** A crop that
+  includes "Student ID" gives the recognizer a crisp printed line that outscores the
+  handwriting beside it. The `id-conflict` veto ignores digitless readings for exactly this
+  reason, but a tight crop is still the better answer: everything downstream — scoring,
+  masking, the preview sheet — works on what you drew.
 - The `--min-score` / `--min-margin` defaults (0.15 / 0.03) are tuned on the synthetic,
   *printed* demo fixtures in `data/demo/`, not on real handwriting. Real scans are worse.
   Raise them to set more aside; lower them to place more, and read every row.

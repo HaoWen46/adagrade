@@ -71,6 +71,20 @@ func identity(idLines, nameLines, probLines []localocr.LineLattice) Identity {
 
 func lines(l ...localocr.LineLattice) []localocr.LineLattice { return l }
 
+// labelLine is a line the veto can read but the SCORER cannot: greedy text and a
+// confidence, with no lattice behind them. It stands for the printed field label
+// a header-box crop picks up next to the handwriting ("Student ID"), which is
+// exactly what the veto must not mistake for a reading of an id.
+//
+// The empty lattice is the honest part rather than a shortcut: localocr's
+// ScoreTarget refuses a frameless line ("this pairing has no opinion"), so the
+// line contributes nothing to any candidate's score and the fixture isolates the
+// veto's own input — Text and Confidence. It also lets these tests spell labels
+// the toy matchKeys charset has no classes for.
+func labelLine(text string, confidence float64) localocr.LineLattice {
+	return localocr.LineLattice{Text: text, Confidence: confidence}
+}
+
 // fixtureRoster builds n students with structurally identical IDs and names:
 // IDs AB01..ABnn and three-letter names with no repeated adjacent character.
 // Structural uniformity is what makes the garbage anchor exact (see
@@ -632,9 +646,15 @@ func vetoRoster(t *testing.T) []roster.Row {
 //
 // The gates are asserted one at a time because each one protects something
 // different: confidence keeps ugly handwriting from vetoing a correct lattice
-// match, run length keeps a "Q1" or a stray digit from counting as an id, and
-// distance >= 3 keeps a near-miss OCR of the RIGHT id (internal/scan's rungs
-// call <= 2 a near miss) from throwing away a page that matched correctly.
+// match, run length keeps a "Q1" or a stray digit from counting as an id, the
+// digit requirement keeps a PRINTED LABEL ("Student ID", which a crisp printer
+// reads at higher confidence than the handwriting beside it) from vetoing every
+// page in the batch, and distance >= 3 keeps a near-miss OCR of the RIGHT id
+// (internal/scan's rungs call <= 2 a near miss) from discarding a correct match.
+//
+// The multi-line cases matter most: a header-box crop routinely yields a label
+// line AND a value line, so the rule is over the SET of qualifying readings —
+// fire only if at least one exists and all of them disagree.
 func TestMatchPages_LegibleWrongIDVetoesTheAssignment(t *testing.T) {
 	rows := vetoRoster(t)
 
@@ -657,6 +677,45 @@ func TestMatchPages_LegibleWrongIDVetoesTheAssignment(t *testing.T) {
 			idLines:    lines(textLine(t, "B99999999", 0.60)),
 			wantStatus: StatusAuto,
 			why:        "a 0.60 read is a guess, and a guess must not veto the lattice",
+		},
+		{
+			name:       "printed label alone",
+			idLines:    lines(labelLine("STUDENT ID", 0.99)),
+			wantStatus: StatusAuto,
+			why:        "a printed field label has no digits, so it is not a reading of an id — and it out-confidences the handwriting on every labelled sheet",
+		},
+		{
+			name:       "printed label beside an agreeing value",
+			idLines:    lines(labelLine("STUDENT ID", 0.99), textLine(t, "B11902001", 0.95)),
+			wantStatus: StatusAuto,
+			why:        "the value line agrees with the assignment; the label is not evidence against it",
+		},
+		{
+			name:       "digit-bearing label beside an agreeing value",
+			idLines:    lines(labelLine("FORM 2024 ABC", 0.99), textLine(t, "B11902001", 0.95)),
+			wantStatus: StatusAuto,
+			why:        "one qualifying reading agreeing is enough: a form number is not a claim about who wrote this",
+		},
+		{
+			name:       "printed label beside a disagreeing value",
+			idLines:    lines(labelLine("STUDENT ID", 0.99), textLine(t, "B99999999", 0.95)),
+			wantStatus: StatusUnmatched,
+			wantReason: ReasonIDConflict,
+			why:        "the label is ignored and the value line still legibly says somebody else",
+		},
+		{
+			name:       "two disagreeing qualifying readings",
+			idLines:    lines(textLine(t, "B99999999", 0.95), textLine(t, "B88888888", 0.95)),
+			wantStatus: StatusUnmatched,
+			wantReason: ReasonIDConflict,
+			why:        "every qualifying reading disagrees, whichever one is the real id",
+		},
+		{
+			name:       "illegible agreement beside a legible disagreement",
+			idLines:    lines(textLine(t, "B11902001", 0.60), textLine(t, "B99999999", 0.95)),
+			wantStatus: StatusUnmatched,
+			wantReason: ReasonIDConflict,
+			why:        "a sub-threshold line cannot rescue a legible conflict — the fail-safe direction is unmatched/ for a human, never a possibly-wrong student",
 		},
 		{
 			name:       "near miss of the assigned id",

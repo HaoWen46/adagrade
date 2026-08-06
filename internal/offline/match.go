@@ -270,41 +270,80 @@ func MatchPages(pages []PageRead, rows []roster.Row, problems int, cs localocr.C
 // greedy decode says "what do these strokes actually spell". A conflict between
 // the two is the signal, and folding it into the score would destroy it.
 //
-// All three gates must fire, and each guards a different false positive; see the
-// idVeto* constants. A vetoed row names NOBODY afterwards (every later stage
-// keys off Status and StudentID), but keeps its scores, because "this page
-// looked confident and was thrown away anyway" is precisely what the operator
-// has to see in the report.
+// THE UNIT OF EVIDENCE IS A QUALIFYING READING, NOT "the best line". A crop of a
+// header box routinely yields more than one line, and picking one of them —
+// however sensibly — is how this check acquires a catastrophic failure mode. On
+// any sheet whose boxes carry PRINTED LABELS (the repo's own blank answer sheet
+// draws them: make-demo-data.py's draw_header(labels=True)), the crisp printed
+// "Student ID" outscores the handwriting beside it on confidence, its longest
+// run is "STUDENTID" — long enough, and far from every roster id — and a
+// most-confident-line rule would veto EVERY PAGE OF THE BATCH.
+//
+// So: a line qualifies when it is confident enough, its longest run is long
+// enough, AND that run contains a digit. Printed field labels are words, and
+// every student-id scheme this system has met carries digits (an all-letter id
+// would need this assumption revisited — it is an assumption, not a law). The
+// veto then fires only when at least one qualifying reading exists and EVERY
+// qualifying reading disagrees. That kills the label mode twice: a digitless
+// label never qualifies in the first place, and a value line that agrees with
+// the assignment suppresses the veto even if some other line — a bizarre
+// digit-bearing label, a form number, a bleed-through from the page behind —
+// disagrees.
+//
+// Agreement is only honoured from a QUALIFYING reading, so a low-confidence
+// line that happens to spell the assigned id cannot rescue a legible
+// disagreement. That direction is deliberate and it is the fail-safe one: the
+// page goes to unmatched/ for a human to place, which costs two minutes, rather
+// than to a student who may not own it.
+//
+// A vetoed row names NOBODY afterwards (every later stage keys off Status and
+// StudentID), but keeps its scores, because "this page looked confident and was
+// thrown away anyway" is precisely what the operator has to see in the report.
+//
+// LIMITATION, by construction: this runs AFTER the solver, so a vetoed page's
+// cell is freed too late — a page the solver displaced INTO another cell to make
+// room for it does not get moved back. Excluding the conflict pre-solve (a cost
+// of +Inf on every cell of a student the reading contradicts) is the stronger
+// variant and the one to reach for if this ever bites; it was not done here
+// because it changes the cost matrix for every page rather than one row of the
+// results, and the displacement it would fix has never been observed. The
+// integration test's no-displacement invariant (every cell some page prints is
+// won by a page that prints it) is what watches for it.
 func vetoLegibleIDConflict(res *MatchResult, f FieldLattices) {
 	if res.Status == StatusUnmatched || res.StudentID == "" {
 		return
 	}
-	line, ok := bestConfidenceLine(f.Lines)
-	if !ok || line.Confidence < idVetoMinConfidence {
-		return
+	assigned := studentid.Normalize(res.StudentID)
+	qualified := false
+	for _, line := range f.Lines {
+		if line.Confidence < idVetoMinConfidence {
+			continue
+		}
+		read := longestIDRun(line.Text)
+		if len([]rune(read)) < idVetoMinRunLength || !hasDigit(read) {
+			continue
+		}
+		if levenshtein(read, assigned) < idVetoMinDistance {
+			return // a qualifying reading agrees: nothing to veto
+		}
+		qualified = true
 	}
-	read := longestIDRun(line.Text)
-	if len([]rune(read)) < idVetoMinRunLength {
-		return
-	}
-	if levenshtein(read, studentid.Normalize(res.StudentID)) < idVetoMinDistance {
+	if !qualified {
 		return
 	}
 	res.Status, res.Reason = StatusUnmatched, ReasonIDConflict
 	res.StudentID, res.StudentName, res.Problem = "", "", 0
 }
 
-// bestConfidenceLine is the line the veto reads, and it is the most confident
-// one rather than the first: a crop of a header box often splits into the
-// printed label and the written value, and only one of them is an id.
-func bestConfidenceLine(lines []localocr.LineLattice) (localocr.LineLattice, bool) {
-	best, found := localocr.LineLattice{}, false
-	for _, l := range lines {
-		if !found || l.Confidence > best.Confidence {
-			best, found = l, true
+// hasDigit is the printed-label filter: it separates "STUDENTID" from
+// "B11902001". See vetoLegibleIDConflict for the assumption it rests on.
+func hasDigit(s string) bool {
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			return true
 		}
 	}
-	return best, found
+	return false
 }
 
 // longestIDRun returns the longest run of ASCII letters and digits in s, under
@@ -319,6 +358,14 @@ func bestConfidenceLine(lines []localocr.LineLattice) (localocr.LineLattice, boo
 // That matters because the field being read is not always just an id: with
 // --id-band the "student_id" field is the entire top strip, and even a drawn box
 // crop picks up its printed label.
+//
+// A run is ASCII A-Z0-9 only, which is NARROWER than studentid.Normalize's
+// unicode.IsLetter/IsNumber test — Normalize keeps Han characters and every
+// other letter. The narrowing is deliberate: a name folded into the middle of a
+// run would make the reading unmatchable at any distance. The comparison target
+// has been through Normalize, so the two agree on every id they will actually
+// meet (ids here are ASCII-shaped); a genuinely non-ASCII id scheme would yield
+// an empty run, fail the veto's length gate, and simply produce no veto.
 func longestIDRun(s string) string {
 	best, run := []rune(nil), []rune(nil)
 	flush := func() {
