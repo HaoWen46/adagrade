@@ -10,9 +10,11 @@ import (
 // with no human in the loop, and the operator has to be told what they gave up
 // BEFORE the run, not after they trust a wrong grade.
 //
-// The text is asserted verbatim by banner_test — soften a line and the build
-// fails. "<out>" is the only substitution; both artifact lines pad to the same
-// column, so the description columns stay aligned for any --out path.
+// banner_test holds a second, independent copy of this text and compares the
+// two line by line, so softening a line here fails the build until someone
+// edits the warning deliberately in both places. "<out>" is the only
+// substitution; both artifact lines pad to the same column, so the description
+// columns stay aligned for any --out path.
 const bannerTemplate = `================================================================================
   ADAMARKER OFFLINE-GRADE — FALLBACK MODE. NO HUMAN REVIEW.
 ================================================================================

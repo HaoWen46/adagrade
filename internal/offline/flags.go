@@ -126,12 +126,13 @@ func ParseArgs(args []string) (Options, error) {
 
 	if err := fs.Parse(args); err != nil {
 		// flag already wrote the reason (and the usage text) into out; that
-		// text names the offending flag, so it IS the actionable message.
-		msg := strings.TrimRight(out.String(), "\n")
+		// text names the offending flag, so it IS the actionable message and
+		// err must not be appended on top of it.
+		msg := strings.TrimRight(out.String(), " \t\n")
 		if msg == "" {
-			msg = err.Error()
+			return Options{}, newUsageError(err, "cannot parse arguments")
 		}
-		return Options{}, newUsageError(err, "%s", msg)
+		return Options{}, newFlagUsageError(err, msg)
 	}
 
 	// Positional scan paths follow the flags; blank ones are rejected rather
@@ -265,14 +266,22 @@ const (
 type offlineErr struct {
 	Msg string
 	Err error
+	// causeInMsg marks a cause that Msg already states, so Error() must not
+	// append it. The flag package writes its own reason into the buffer we
+	// adopt as Msg; appending would print it twice, and for -h would trail the
+	// help text with the "flag: help requested" sentinel.
+	causeInMsg bool
 }
 
 func (e offlineErr) Error() string {
-	if e.Err == nil {
-		return e.Msg
-	}
-	if e.Msg == "" {
+	switch {
+	case e.Msg == "":
+		if e.Err == nil {
+			return ""
+		}
 		return e.Err.Error()
+	case e.Err == nil || e.causeInMsg:
+		return e.Msg
 	}
 	return e.Msg + ": " + e.Err.Error()
 }
@@ -281,6 +290,11 @@ func (e offlineErr) Unwrap() error { return e.Err }
 
 // The typed errors. Each is a distinct type purely so errors.As can tell them
 // apart; the behaviour lives in offlineErr.
+//
+// Only POINTER values are classified: ExitCode matches *UsageError, not
+// UsageError, and every constructor below returns a pointer. Later stages must
+// return these the same way — a by-value RosterError would fall through to
+// exit 1.
 type (
 	UsageError    struct{ offlineErr } // exit 2
 	RosterError   struct{ offlineErr } // exit 3
@@ -298,6 +312,13 @@ func newOfflineErr(cause error, format string, a ...any) offlineErr {
 
 func newUsageError(cause error, format string, a ...any) *UsageError {
 	return &UsageError{newOfflineErr(cause, format, a...)}
+}
+
+// newFlagUsageError reports a failure the flag package already described in
+// full: msg is flag's own output (the reason, then the usage block), so the
+// cause is kept only for errors.Is/As and never re-appended to the text.
+func newFlagUsageError(cause error, msg string) *UsageError {
+	return &UsageError{offlineErr{Msg: msg, Err: cause, causeInMsg: true}}
 }
 
 func newRosterError(cause error, format string, a ...any) *RosterError {

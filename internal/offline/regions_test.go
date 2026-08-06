@@ -99,6 +99,57 @@ func TestLoadRegionsFailures(t *testing.T) {
 	}
 }
 
+// TestLoadRegionsRejectsUnknownFields covers the failure that makes silent key
+// tolerance dangerous here: x and y legally default to 0, so a mistyped key
+// yields a plausible-looking region in the top-LEFT corner while the real
+// student ID at top-right is never masked and goes to the provider in the
+// clear. The file must be rejected, not partially understood.
+func TestLoadRegionsRejectsUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+	tests := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{
+			"mistyped coordinate keys",
+			`{"version":1,"regions":[{"kind":"student_id","left":0.6,"top":0.02,"w":0.3,"h":0.06}]}`,
+			[]string{"left"},
+		},
+		{
+			// The server's own id-region rows carry a color and no version, so
+			// operators will try that shape; the message has to show the one
+			// this command accepts instead of just refusing.
+			"server-shaped region with color",
+			`{"version":1,"regions":[{"kind":"student_id","x":0.6,"y":0.02,"w":0.3,"h":0.06,"color":"#4a4a4a"}]}`,
+			[]string{"color", "kind", "padding"},
+		},
+		{
+			"unknown top-level key",
+			`{"version":1,"page":"first","regions":[{"kind":"name","x":0,"y":0,"w":0.5,"h":0.1}]}`,
+			[]string{"page"},
+		},
+		{
+			"trailing data",
+			`{"version":1,"regions":[{"kind":"name","x":0,"y":0,"w":0.5,"h":0.1}]}{"version":1}`,
+			[]string{"trailing"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeFile(t, dir, "r.json", tc.body)
+			set, err := LoadRegions(path)
+			if len(set.All()) != 0 {
+				t.Errorf("All() = %v, want empty set on failure", set.All())
+			}
+			assertErrorType[*RegionsError](t, err, append([]string{path}, tc.want...)...)
+			if got := ExitCode(err); got != ExitRegions {
+				t.Errorf("ExitCode = %d, want %d", got, ExitRegions)
+			}
+		})
+	}
+}
+
 func TestLoadRegionsMissingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nope.json")
 	_, err := LoadRegions(path)

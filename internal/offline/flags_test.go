@@ -246,6 +246,47 @@ func TestParseArgsHelp(t *testing.T) {
 				t.Errorf("%s: usage text %q does not mention %q", arg, err.Error(), want)
 			}
 		}
+		// flag.ErrHelp is the sentinel the caller matches on, not something
+		// the operator should read: the printed help must not trail off into
+		// "…: flag: help requested".
+		msg := err.Error()
+		if strings.Contains(msg, flag.ErrHelp.Error()) {
+			t.Errorf("%s: help text carries the %q sentinel:\n%s", arg, flag.ErrHelp.Error(), msg)
+		}
+		if msg != strings.TrimRight(msg, " \t\n") {
+			t.Errorf("%s: help text ends in whitespace: %q", arg, msg)
+		}
+	}
+}
+
+// TestParseArgsErrorReasonAppearsOnce guards against the flag package's reason
+// being concatenated onto a message that already contains it — the operator
+// would read the same complaint twice, once above the usage block and once
+// after it.
+func TestParseArgsErrorReasonAppearsOnce(t *testing.T) {
+	tests := []struct {
+		name   string
+		args   []string
+		reason string
+	}{
+		{"unknown flag", baseArgs("--bogus"), "flag provided but not defined: -bogus"},
+		{"bad numeric value", baseArgs("--dpi", "many"), `invalid value "many" for flag -dpi`},
+		{"blank repeatable value", baseArgs("--scans", ""), "invalid value"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseArgs(tc.args)
+			if err == nil {
+				t.Fatalf("ParseArgs error = nil, want *UsageError")
+			}
+			msg := err.Error()
+			if n := strings.Count(msg, tc.reason); n != 1 {
+				t.Errorf("reason %q appears %d times, want exactly 1:\n%s", tc.reason, n, msg)
+			}
+			if !strings.Contains(msg, "-roster") {
+				t.Errorf("message does not carry the usage text:\n%s", msg)
+			}
+		})
 	}
 }
 

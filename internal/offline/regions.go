@@ -1,10 +1,13 @@
 package offline
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/HaoWen46/adagrade/internal/imaging"
 )
@@ -109,6 +112,21 @@ func (s RegionSet) MaskRegions() []imaging.Region {
 	return out
 }
 
+// unknownJSONField pulls the field name out of encoding/json's
+// DisallowUnknownFields error ("json: unknown field \"color\"") so the message
+// can name it. A future wording change in the stdlib only costs the name, not
+// the rejection: the caller still fails, just with the generic message.
+func unknownJSONField(err error) (string, bool) {
+	rest, ok := strings.CutPrefix(err.Error(), "json: unknown field ")
+	if !ok {
+		return "", false
+	}
+	if name, uerr := strconv.Unquote(rest); uerr == nil {
+		return name, true
+	}
+	return strings.Trim(rest, `"`), true
+}
+
 func toImagingRegion(r Region) imaging.Region {
 	return imaging.Region{X: r.X, Y: r.Y, W: r.W, H: r.H, Padding: r.Padding}
 }
@@ -138,6 +156,12 @@ func BandRegions(band float64) RegionSet {
 //
 // Padding is a pointer so an omitted padding (default) is distinguishable from
 // an explicit 0 (no slack, which is legal).
+//
+// Unknown keys are rejected (see LoadRegions) rather than ignored, because x
+// and y legally default to 0: a file written with the server's key names, or
+// with any typo in "x"/"y", would otherwise decode into a plausible-looking
+// region pinned to the top-left corner while the identity it was meant to
+// cover stays unmasked.
 type regionsFile struct {
 	Version int `json:"version"`
 	Regions []struct {
@@ -150,11 +174,17 @@ type regionsFile struct {
 	} `json:"regions"`
 }
 
+// acceptedRegionKeys is the schema hint carried by unknown-field errors. An
+// operator who reached for the server's shape needs to see what this command
+// takes, not just that their file was refused.
+const acceptedRegionKeys = `accepted keys are "version" and "regions", where each region takes "kind", "x", "y", "w", "h" and an optional "padding" (no "color": the mask fill is fixed)`
+
 // LoadRegions reads and validates an id-regions JSON file. Every failure is a
 // *RegionsError (exit 7) naming the offending region index and field, because
 // coordinates are hand-edited and "invalid regions file" is unfixable advice.
 //
-// Validation is strict on purpose: a region that is silently clamped or dropped
+// Validation is strict on purpose, including rejecting unknown keys and
+// trailing data: a region that is silently clamped, dropped or half-understood
 // would mask the wrong part of the page, and the operator would only find out
 // by reading the masked preview after identity had already been sent.
 func LoadRegions(path string) (RegionSet, error) {
@@ -165,9 +195,17 @@ func LoadRegions(path string) (RegionSet, error) {
 		}
 		return RegionSet{}, newRegionsError(err, "cannot read id-regions file %s", path)
 	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
 	var file regionsFile
-	if err := json.Unmarshal(data, &file); err != nil {
+	if err := dec.Decode(&file); err != nil {
+		if field, ok := unknownJSONField(err); ok {
+			return RegionSet{}, newRegionsError(err, "id-regions file %s has unknown field %q: %s (a mistyped coordinate key would leave the region in the page corner and the real identity unmasked)", path, field, acceptedRegionKeys)
+		}
 		return RegionSet{}, newRegionsError(err, "id-regions file %s is not valid JSON", path)
+	}
+	if dec.More() {
+		return RegionSet{}, newRegionsError(nil, "id-regions file %s has trailing data after the top-level JSON object: it must hold exactly one object, %s", path, acceptedRegionKeys)
 	}
 	if file.Version != regionsFileVersion {
 		return RegionSet{}, newRegionsError(nil, "id-regions file %s has version %d, want %d", path, file.Version, regionsFileVersion)
