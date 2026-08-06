@@ -104,8 +104,8 @@ type Config struct {
 
 	// Local OCR (D24): the first identification rung, entirely offline. All three
 	// are optional and never required — see LocalOCRConfigured.
-	OCRModelPath       string // path to the ch_PP-OCRv4 rec .onnx model
-	OCRKeysPath        string // path to the ppocr_keys dict .txt
+	OCRModelPath       string // path to the PP-OCRv5 server rec .onnx model (PP-OCRv5_server_rec_infer.onnx)
+	OCRKeysPath        string // path to the charset dict .txt (ppocrv5_dict.txt; the class count is validated against it)
 	ONNXRuntimeLibPath string // path to the libonnxruntime shared library
 
 	// Email (publish-email-regrade spec §3, D31). Email.Provider selects
@@ -526,9 +526,30 @@ func parseShutdownDrain(raw string) (time.Duration, error) {
 	return d, nil
 }
 
+// LoadProviders resolves the LLM provider table from environment variables
+// alone: ADAMARKER_PROVIDERS with its per-provider
+// ADAMARKER_PROVIDER_<NAME>_{KIND,BASE_URL,API_KEY}, or — when that list is
+// empty — the auto-detected vendor keys (DEEPSEEK_API_KEY, QWEN_API_KEY,
+// OPENROUTER_API_KEY, each with an optional <VENDOR>_BASE_URL override). See
+// loadProviders below for the exact rules; this is a thin export of it.
+//
+// It touches no database and needs no ADAMARKER_DATABASE_URL, and it skips the
+// rest of Load — including the production validation that DOES require a
+// database URL. Offline tooling uses it to construct an LLM client without the
+// server's app-managed registry (D11 v1), which is unreachable without a
+// database.
+//
+// No configured keys is not an error: it returns an empty table and nil, and
+// the caller decides whether it can proceed with nothing.
+func LoadProviders(getenv func(string) string) ([]Provider, error) {
+	return loadProviders(getenv)
+}
+
 // loadProviders resolves LLM providers. An explicit ADAMARKER_PROVIDERS list wins;
-// otherwise well-known vendor keys (DEEPSEEK_API_KEY, QWEN_API_KEY) are auto-detected
-// with their documented default base URLs (D11).
+// otherwise well-known vendor keys (DEEPSEEK_API_KEY, QWEN_API_KEY,
+// OPENROUTER_API_KEY) are auto-detected with their documented default base URLs
+// (D11) — the same three the exported doc above lists, and the same three the
+// body below actually checks.
 func loadProviders(getenv func(string) string) ([]Provider, error) {
 	if list := getenv(envProviders); list != "" {
 		var out []Provider

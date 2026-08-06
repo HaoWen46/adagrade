@@ -17,21 +17,29 @@ import (
 	"github.com/HaoWen46/adagrade/internal/ocr"
 )
 
-// Recognizer input geometry (docs/DECISIONS.md D24). The ch_PP-OCRv4 mobile rec
-// model takes NCHW [1,3,H,W]; H is fixed at 48 and W varies per line (dynamic
-// axis), which is why the Engine uses a DynamicAdvancedSession.
+// Recognizer input geometry (docs/DECISIONS.md D24). The PP-OCR rec models take
+// NCHW [1,3,H,W]; H is fixed at 48 and W varies per line (dynamic axis), which
+// is why the Engine uses a DynamicAdvancedSession. The geometry is the same for
+// the v4 mobile and v5 server exports.
+//
+// recMaxW is 1280 rather than the v4-era 640: PP-OCRv5 rec trains at W=320 with
+// a dynamic width admitting up to 3200, and the identity bands this package
+// feeds it are cropped from pages rendered at ~2200px on the long edge, so a
+// full-width line truncates at 640 — losing the tail of exactly the long
+// ID+name strings that matter. Doubling the cap doubles T (the CTC time steps),
+// a cost the K=64 lattice compression absorbs downstream.
 const (
-	recHeight = 48  // model input height
-	recMaxW   = 640 // cap on per-line width
-	recMinW   = 16  // pad narrower lines up to this floor
+	recHeight = 48   // model input height
+	recMaxW   = 1280 // cap on per-line width
+	recMinW   = 16   // pad narrower lines up to this floor
 )
 
 // Config points the Engine at its three on-disk dependencies. All are required;
-// none are embedded so the ~11MB model and the shared library stay out of the
-// binary and the repo (assets are provisioned separately).
+// none are embedded so the ~85MB model and the shared library stay out of the
+// binary and the repo (assets are provisioned separately by `make ocr-models`).
 type Config struct {
-	ModelPath          string // ch_PP-OCRv4_rec_infer.onnx
-	KeysPath           string // ppocr_keys_v1.txt (one glyph per line)
+	ModelPath          string // PP-OCRv5_server_rec_infer.onnx
+	KeysPath           string // ppocrv5_dict.txt (one glyph per line)
 	ONNXRuntimeLibPath string // libonnxruntime.{so,dylib,dll}
 }
 
@@ -111,9 +119,12 @@ func New(cfg Config) (*Engine, error) {
 		return nil, err
 	}
 
-	// The PP-OCRv4 rec export names its input "x" and its (softmaxed) output
-	// "softmax_11.tmp_0"; discover them from metadata so we do not hard-code a
-	// name that a re-export might change.
+	// PP-OCR rec exports name their input "x", but the output name and its
+	// scale differ per release: v4 ended in a Softmax node ("softmax_11.tmp_0",
+	// probabilities), while the v5 server export has no terminal softmax and
+	// emits raw logits. Both are handled downstream by looksSoftmaxed, and the
+	// names are discovered from metadata rather than hard-coded so a re-export
+	// cannot silently break the session.
 	inName, outName, outClasses, err := modelIO(cfg.ModelPath)
 	if err != nil {
 		return nil, err
@@ -217,6 +228,33 @@ func (e *Engine) closed() bool {
 // logs the crop or the recognized text (D14 PII). The returned lines are in
 // top-to-bottom order; empty recognitions are skipped.
 func (e *Engine) ReadLines(ctx context.Context, crop imaging.IDCrop) ([]ocr.Line, error) {
+	gray, err := cropGray(crop)
+	if err != nil {
+		return nil, err
+	}
+	return readLinesRetry(ctx, gray, e.recognize)
+}
+
+// ReadLattices is ReadLines with the model's per-timestep class distribution
+// kept: same band split, same retry ladder, but each line also carries the
+// top-K CTC lattice of the WINNING variant's inference pass, so a lexicon
+// scorer can ask how well an arbitrary candidate string explains the same
+// pixels the reported text came from. Low-confidence lines are returned like
+// any other (with their lattices); the caller decides what to do with them.
+func (e *Engine) ReadLattices(ctx context.Context, crop imaging.IDCrop) ([]LineLattice, error) {
+	gray, err := cropGray(crop)
+	if err != nil {
+		return nil, err
+	}
+	return retryLadder(ctx, gray, func(ctx context.Context, g *image.Gray) ([]LineLattice, error) {
+		return readBandsWith(ctx, g, e.recognizeLattice)
+	}, bestLatticeConfidence)
+}
+
+// cropGray is the entry gate both read paths share: reject an empty crop,
+// decode the sealed JPEG, and hand the band splitter a grayscale image. The
+// two failures name mechanism only, never crop content (D14 PII).
+func cropGray(crop imaging.IDCrop) (*image.Gray, error) {
 	if crop.IsZero() {
 		return nil, fmt.Errorf("localocr: empty IDCrop")
 	}
@@ -224,22 +262,63 @@ func (e *Engine) ReadLines(ctx context.Context, crop imaging.IDCrop) ([]ocr.Line
 	if err != nil {
 		return nil, fmt.Errorf("localocr: decode crop JPEG: %w", err)
 	}
-	return readLinesRetry(ctx, toGray(src), e.recognize)
+	return toGray(src), nil
 }
 
 // recognize runs one line-band image through preprocess -> session -> CTC.
 func (e *Engine) recognize(img image.Image) (string, float64, error) {
+	rows, err := e.runLine(img)
+	if err != nil {
+		return "", 0, err
+	}
+	text, conf := e.decode(rows)
+	return text, conf, nil
+}
+
+// recognizeLattice runs one line band and returns its greedy decode alongside a
+// lattice built from the SAME rows, for the retry ladder's band loop (the bool
+// reports whether anything was read, mirroring recognize's empty-text skip).
+//
+// The lattice is compressed here, per pass, rather than carrying raw rows
+// through the ladder and compressing only the winner: a lattice is ~40KB where
+// the rows behind it are ~2MB, and identify workers run concurrently, so the
+// discarded work on the (rare) retry path buys a bounded memory footprint.
+func (e *Engine) recognizeLattice(img image.Image) (LineLattice, bool, error) {
+	rows, err := e.runLine(img)
+	if err != nil {
+		return LineLattice{}, false, err
+	}
+	text, conf := e.decode(rows)
+	// NewLattice takes the RAW rows: it re-applies the softmaxed/logits
+	// decision itself and needs the logits to compute log-softmax directly.
+	return LineLattice{Lattice: NewLattice(rows, latticeTopK), Text: text, Confidence: conf}, text != "", nil
+}
+
+// decode greedy-decodes raw model rows, normalizing first when the export does
+// not end in a Softmax node.
+func (e *Engine) decode(rows [][]float32) (string, float64) {
+	if len(rows) > 0 && !looksSoftmaxed(rows[0]) {
+		rows = softmaxRows(rows)
+	}
+	return ctcGreedyDecode(rows, e.keys, e.trailingSpace)
+}
+
+// runLine runs one line-band image through preprocess -> session and returns
+// the model's raw [T][C] output rows. It is the single inference path: both
+// the text and the lattice callers go through it, so the closed-engine guard
+// and the mutex discipline (D26) exist in exactly one place.
+func (e *Engine) runLine(img image.Image) ([][]float32, error) {
 	// Fast closed-check before allocating a native ORT tensor: a Close may have
 	// already Destroyed the session, in which case there is nothing to run. The
 	// authoritative re-check happens again under e.mu just before Run so a Close
 	// racing this call cannot free the session mid-Run (D26).
 	if e.closed() {
-		return "", 0, errEngineClosed
+		return nil, errEngineClosed
 	}
 	data, shape := preprocess(img, recHeight, recMaxW, recMinW)
 	in, err := ort.NewTensor(ort.NewShape(shape...), data)
 	if err != nil {
-		return "", 0, fmt.Errorf("localocr: build input tensor: %w", err)
+		return nil, fmt.Errorf("localocr: build input tensor: %w", err)
 	}
 	defer in.Destroy()
 
@@ -249,28 +328,31 @@ func (e *Engine) recognize(img image.Image) (string, float64, error) {
 	e.mu.Lock()
 	if e.session == nil {
 		e.mu.Unlock()
-		return "", 0, errEngineClosed
+		return nil, errEngineClosed
 	}
 	err = e.session.Run([]ort.Value{in}, outputs)
 	e.mu.Unlock()
 	if err != nil {
-		return "", 0, fmt.Errorf("localocr: inference: %w", err)
+		return nil, fmt.Errorf("localocr: inference: %w", err)
 	}
 	out := outputs[0]
 	defer out.Destroy()
 
-	rows, err := outputToRows(out)
-	if err != nil {
-		return "", 0, err
-	}
-	if len(rows) > 0 && !looksSoftmaxed(rows[0]) {
-		rows = softmaxRows(rows)
-	}
-	text, conf := ctcGreedyDecode(rows, e.keys, e.trailingSpace)
-	return text, conf, nil
+	return outputToRows(out)
 }
 
 // outputToRows reshapes a [1, T, C] float32 output Value into a [T][C] matrix.
+//
+// The rows alias the tensor's data and MAY outlive it: runLine passes a nil
+// output to Run, so onnxruntime_go auto-allocates it and hands back a tensor
+// whose buffer it has already copied into Go-managed memory
+// (onnxruntime_go.go:3071-3080 -> createTensorFromOrtValue:2886-2941 ->
+// createTensorWithCData:2800-2807, which does `dataCopy := make([]T, ...);
+// copy(dataCopy, actualData)`). Tensor.Destroy (:683-690) releases the
+// OrtValue wrapping that Go buffer and nils the struct's fields; the array
+// itself stays alive for as long as these rows reference it. Copying here
+// again would cost an extra T*C float32 allocation per line per pass on the
+// identify path for nothing.
 func outputToRows(v ort.Value) ([][]float32, error) {
 	t, ok := v.(*ort.Tensor[float32])
 	if !ok {
@@ -294,8 +376,9 @@ func outputToRows(v ort.Value) ([][]float32, error) {
 }
 
 // modelIO reads the model's single input/output names and, when statically
-// known, the output's trailing class dimension. Falls back to the PP-OCRv4
-// default names when metadata is unavailable.
+// known, the output's trailing class dimension. There is no hard-coded name
+// fallback for any release: unreadable metadata is an error, because guessing a
+// name that a re-export changed would fail later and far less legibly.
 func modelIO(path string) (inName, outName string, outClasses int, err error) {
 	ins, outs, e := ort.GetInputOutputInfo(path)
 	if e != nil {
@@ -307,7 +390,10 @@ func modelIO(path string) (inName, outName string, outClasses int, err error) {
 	inName = ins[0].Name
 	outName = outs[0].Name
 	// Output dims: [batch, T, C]; C is the last dim if it is statically known
-	// (>0). Dynamic dims are reported as <= 0.
+	// (>0). Dynamic dims are reported as <= 0 — that is onnxruntime_go v1.31.0's
+	// convention (InputOutputInfo.Dimensions, a Shape of int64), pinned here so
+	// an upgrade that changes how unknown dims are spelled shows up as a stale
+	// citation rather than as a silently wrong class count.
 	dims := outs[0].Dimensions
 	if n := len(dims); n > 0 {
 		if c := dims[n-1]; c > 0 {

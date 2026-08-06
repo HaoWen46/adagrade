@@ -61,34 +61,68 @@ sqlc:
 # (`brew install onnxruntime`, or a GitHub release) at >= 1.27 — the ORT Go
 # binding requires C API v26, which only 1.27+ satisfies (verified empirically,
 # see .superpowers/sdd/t1-localocr-report.md).
-OCR_DIR       := data/ocr
-OCR_MODEL_URL := https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx
-OCR_KEYS_URL  := https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/main/ppocr/utils/ppocr_keys_v1.txt
+OCR_DIR   := data/ocr
+OCR_MODEL := $(OCR_DIR)/PP-OCRv5_server_rec_infer.onnx
+OCR_KEYS  := $(OCR_DIR)/ppocrv5_dict.txt
+# PP-OCRv5 server rec (D24): supersedes the ch_PP-OCRv4 mobile rec whose charset
+# was missing many Traditional Chinese characters. Primary source is the official
+# PaddlePaddle org export (Apache-2.0); the ModelScope mirror is the fallback for
+# networks that cannot reach huggingface.co. The two copies differ only by a few
+# bytes of ONNX metadata — either satisfies the gates below.
+OCR_MODEL_URL := https://huggingface.co/PaddlePaddle/PP-OCRv5_server_rec_onnx/resolve/main/inference.onnx
+OCR_MODEL_ALT := https://modelscope.cn/models/RapidAI/RapidOCR/resolve/master/onnx/PP-OCRv5/rec/ch_PP-OCRv5_rec_server.onnx
+OCR_KEYS_URL  := https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/main/ppocr/utils/dict/ppocrv5_dict.txt
+# Sanity gates: the v5 server rec export is ~84.5MB and ppocrv5_dict.txt carries
+# 18,383 entries. A file materially under these landed an HTML error page or was
+# truncated mid-transfer, so the target deletes it and fails loudly rather than
+# leaving a corrupt asset the engine would reject later with a stranger error.
+OCR_MODEL_MIN_BYTES := 80000000
+OCR_KEYS_MIN_LINES  := 18000
 
+# Both assets download to a .part file and are moved into place only after their
+# size/line gate passes: the gates above are also the SKIP conditions, so a
+# Ctrl-C'd 80MB partial written straight to $(OCR_MODEL) would be large enough to
+# be mistaken for a complete model on the next run and would fail later, at load
+# time, as an unreadable ONNX graph. mv within one directory is atomic.
 ocr-models:
 	@mkdir -p $(OCR_DIR)
-	@echo "Downloading ch_PP-OCRv4 rec model..."
-	@curl -fL --retry 3 -o $(OCR_DIR)/ch_PP-OCRv4_rec_infer.onnx "$(OCR_MODEL_URL)"
-	@size=$$(wc -c < $(OCR_DIR)/ch_PP-OCRv4_rec_infer.onnx | tr -d ' '); \
-	if [ "$$size" -lt 5000000 ]; then \
-		echo "error: $(OCR_DIR)/ch_PP-OCRv4_rec_infer.onnx is only $$size bytes (want >5MB) — download likely failed"; \
-		rm -f $(OCR_DIR)/ch_PP-OCRv4_rec_infer.onnx; \
-		exit 1; \
+	@if [ -f $(OCR_MODEL) ] && [ "$$(wc -c < $(OCR_MODEL) | tr -d ' ')" -ge $(OCR_MODEL_MIN_BYTES) ]; then \
+		echo "PP-OCRv5 server rec model already present — skipping download."; \
+	else \
+		echo "Downloading PP-OCRv5 server rec model (~85MB)..."; \
+		curl -fL --retry 3 -o $(OCR_MODEL).part "$(OCR_MODEL_URL)" || \
+		curl -fL --retry 3 -o $(OCR_MODEL).part "$(OCR_MODEL_ALT)" || \
+		{ echo "error: both mirrors failed for $(OCR_MODEL)"; rm -f $(OCR_MODEL).part; exit 1; }; \
+		size=$$(wc -c < $(OCR_MODEL).part | tr -d ' '); \
+		if [ "$$size" -lt $(OCR_MODEL_MIN_BYTES) ]; then \
+			echo "error: the download is only $$size bytes (want >80MB) — discarding the partial file"; \
+			rm -f $(OCR_MODEL).part; \
+			exit 1; \
+		fi; \
+		mv $(OCR_MODEL).part $(OCR_MODEL); \
+		echo "model ok ($$size bytes)"; \
 	fi
-	@echo "Downloading ppocr_keys dict..."
-	@curl -fL --retry 3 -o $(OCR_DIR)/ppocr_keys_v1.txt "$(OCR_KEYS_URL)"
-	@lines=$$(wc -l < $(OCR_DIR)/ppocr_keys_v1.txt | tr -d ' '); \
-	if [ "$$lines" -lt 1000 ]; then \
-		echo "error: $(OCR_DIR)/ppocr_keys_v1.txt only has $$lines lines — download likely failed"; \
-		rm -f $(OCR_DIR)/ppocr_keys_v1.txt; \
-		exit 1; \
+	@if [ -f $(OCR_KEYS) ] && [ "$$(wc -l < $(OCR_KEYS) | tr -d ' ')" -ge $(OCR_KEYS_MIN_LINES) ]; then \
+		echo "ppocrv5_dict.txt already present — skipping download."; \
+	else \
+		echo "Downloading ppocrv5_dict charset..."; \
+		curl -fL --retry 3 -o $(OCR_KEYS).part "$(OCR_KEYS_URL)" || \
+		{ echo "error: download failed for $(OCR_KEYS)"; rm -f $(OCR_KEYS).part; exit 1; }; \
+		lines=$$(wc -l < $(OCR_KEYS).part | tr -d ' '); \
+		if [ "$$lines" -lt $(OCR_KEYS_MIN_LINES) ]; then \
+			echo "error: the download only has $$lines lines (want >=18000) — discarding the partial file"; \
+			rm -f $(OCR_KEYS).part; \
+			exit 1; \
+		fi; \
+		mv $(OCR_KEYS).part $(OCR_KEYS); \
+		echo "keys ok ($$lines lines)"; \
 	fi
 	@echo ""
 	@echo "OCR assets ready in ./$(OCR_DIR)/"
 	@echo ""
 	@echo "Next steps — set these three env vars (e.g. in .env) to enable local OCR:"
-	@echo "  ADAMARKER_OCR_MODEL=./$(OCR_DIR)/ch_PP-OCRv4_rec_infer.onnx"
-	@echo "  ADAMARKER_OCR_KEYS=./$(OCR_DIR)/ppocr_keys_v1.txt"
+	@echo "  ADAMARKER_OCR_MODEL=./$(OCR_MODEL)"
+	@echo "  ADAMARKER_OCR_KEYS=./$(OCR_KEYS)"
 	@echo "  ADAMARKER_ONNXRUNTIME=/path/to/libonnxruntime.{dylib,so}"
 	@echo ""
 	@echo "NOTE: libonnxruntime is NOT downloaded by this target. Install it"

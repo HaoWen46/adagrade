@@ -23,10 +23,11 @@ AI-assisted grading system, one Go binary + Postgres. Product plan: [`ADA-Marker
 ## Test / build
 
 - `make test` — unit tests, no Postgres needed; run `make vet` too before calling work done.
-- `make test-integration` — starts the compose test DB (:5434) and runs all tests with `-count=1`.
+- `make test-integration` — starts the compose test DB (:5434) and runs all tests with `-count=1`; the harness migrates one template database and clones a throwaway DB per test (internal/store/storetest), so a non-compose `TEST_DB_URL` user needs the CREATEDB privilege.
 - NEVER run live tests (`-tags live`, `TestLive_*`, `*_live_test.go`) unless explicitly asked — they call paid LLM APIs.
 - `make build` → `bin/adamarker`; `make frontend` → SPA bundle embedded into the next Go build.
 - Demo fixtures: `make demo-data` regenerates the committed `data/demo/`; `make demo-walkthrough` seeds a completed demo exam into a RUNNING :8899 server (idempotent).
+- `adamarker offline-grade` is a standalone no-DB fallback (roster CSV + scan PDFs → forced match → auto-mask → API transcription → LaTeX/Typst bundle; see README); its end-to-end test (`internal/offline/integration_test.go`) is env-gated on `ADAMARKER_OCR_MODEL`, `ADAMARKER_OCR_KEYS` and `ADAMARKER_ONNXRUNTIME` and calls no paid API.
 
 ## Tooling
 

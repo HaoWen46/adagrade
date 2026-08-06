@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,8 +11,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/rivermigrate"
 	"github.com/riverqueue/river/rivertype"
+
+	"github.com/HaoWen46/adagrade/internal/store/storetest"
 )
 
 // --- isShutdownCancel / snoozeOnShutdown: pure logic, no DB (F17) ---
@@ -82,50 +82,16 @@ func (w *slowWorker) Work(ctx context.Context, job *river.Job[slowArgs]) error {
 	}
 }
 
-// testDSN mirrors storetest.DSN without importing it (queue is a lower layer): skip
-// unless the integration DB is configured.
-func testDSN(t *testing.T) string {
-	t.Helper()
-	dsn := os.Getenv("ADAMARKER_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("ADAMARKER_TEST_DATABASE_URL not set")
-	}
-	return dsn
-}
-
-// freshQueuePool returns a migrated pool for an isolated client, holding the shared
-// test-DB advisory lock for the test's duration.
+// freshQueuePool returns a pool on this test's own throwaway database — already
+// fully migrated, River tables included — so queue tests are isolated without
+// any shared-lock/schema-reset dance (see storetest.DSN).
 func freshQueuePool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, testDSN(t))
+	pool, err := pgxpool.New(context.Background(), storetest.DSN(t))
 	if err != nil {
 		t.Fatalf("pool: %v", err)
 	}
 	t.Cleanup(pool.Close)
-
-	lock, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire lock conn: %v", err)
-	}
-	if _, err := lock.Exec(ctx, "SELECT pg_advisory_lock(hashtext('adamarker-test-db'))"); err != nil {
-		lock.Release()
-		t.Fatalf("advisory lock: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = lock.Exec(context.Background(), "SELECT pg_advisory_unlock(hashtext('adamarker-test-db'))")
-		lock.Release()
-	})
-	if _, err := pool.Exec(ctx, "DROP SCHEMA public CASCADE; CREATE SCHEMA public"); err != nil {
-		t.Fatalf("reset schema: %v", err)
-	}
-	migrator, err := rivermigrate.New(riverpgxv5.New(pool), nil)
-	if err != nil {
-		t.Fatalf("river migrator: %v", err)
-	}
-	if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
-		t.Fatalf("river migrate: %v", err)
-	}
 	return pool
 }
 

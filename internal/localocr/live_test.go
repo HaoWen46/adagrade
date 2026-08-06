@@ -23,8 +23,8 @@ import (
 // TestLive_ReadLines is an opt-in end-to-end test against the real ONNX
 // recognizer. It is skipped unless all three asset env vars are set:
 //
-//	ADAMARKER_OCR_MODEL   -> ch_PP-OCRv4_rec_infer.onnx
-//	ADAMARKER_OCR_KEYS    -> ppocr_keys_v1.txt
+//	ADAMARKER_OCR_MODEL   -> PP-OCRv5_server_rec_infer.onnx (make ocr-models)
+//	ADAMARKER_OCR_KEYS    -> ppocrv5_dict.txt               (make ocr-models)
 //	ADAMARKER_ONNXRUNTIME -> libonnxruntime.{so,dylib}
 //
 // It renders the student-ID string "B11902156" in black on white using the

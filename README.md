@@ -16,6 +16,7 @@ grade distribution + regrades entirely over email.
 | Portable TA deployment | [`docs/TA_DEPLOYMENT.md`](docs/TA_DEPLOYMENT.md) |
 | VM operations, backup, restore | [`docs/OPERATIONS.md`](docs/OPERATIONS.md) |
 | Build decisions and caveats | [`docs/DECISIONS.md`](docs/DECISIONS.md), [`docs/PLAN_GAPS.md`](docs/PLAN_GAPS.md) |
+| Grading with no server and no database | [Offline fallback](#offline-fallback-adamarker-offline-grade) |
 | Email, regrade, trust, cost designs | [`publish + regrade`](docs/superpowers/specs/2026-07-03-publish-email-regrade-design.md), [`trust + cost`](docs/superpowers/specs/2026-07-03-trust-cost-design.md) |
 
 ## Runtime Shape
@@ -92,6 +93,136 @@ Built so far:
 
 Not yet built: Phase 5 (multi-model agreement), Phase 8 (reports beyond the override-rate
 and cost-per-run subset shipped tonight — cross-exam comparisons stay open).
+
+## Offline Fallback (`adamarker offline-grade`)
+
+A standalone subcommand for the day the server is down, unreachable, or simply not wanted:
+roster CSV + scanned PDFs in, a transcription bundle out, with **no database, no HTTP server
+and no accounts**. It prints a warning banner before it does anything, then:
+force-matches every page to a roster (student, problem) cell, masks the identity regions on
+this machine, sends only the masked images to the configured LLM API for transcription, and
+writes a LaTeX + Typst **source** bundle mirroring the web export (it does not compile
+anything — you run `xelatex`/`typst` yourself).
+
+It is a fallback, not a second product: there is no rubric, no grading, no review UI, no
+publish and no email. Identification is *forced* — every page it can place gets placed,
+including ones the server would have parked in the orphan queue for a human.
+
+```sh
+# demo fixtures shipped in this repo (10 students x 4 problems, 40 pages)
+adamarker offline-grade \
+  --roster data/demo/demo-roster.csv \
+  --out ./offline-run --problems 4 \
+  --id-regions ./id-regions.json \
+  --base-url https://dashscope-intl.aliyuncs.com/apps/anthropic \
+  --api-key-env QWEN_API_KEY --model qwen3-vl-plus \
+  data/demo/demo-scan-pile.pdf
+```
+
+- Transcription is a **vision** call: `--model` must name a model that accepts images
+  (`qwen3-vl-plus` is what this repo validates live against).
+- The API key is never an argument — `--api-key-env` names the *variable* holding it.
+  `--provider-kind` defaults to `anthropic-compat`; pass `openai-compat` for an OpenAI Chat
+  Completions endpoint (OpenRouter, most gateways). `--provider NAME` is the alternative
+  route: it looks the name up in the env provider table (`ADAMARKER_PROVIDERS` +
+  `ADAMARKER_PROVIDER_<NAME>_{KIND,BASE_URL,API_KEY}`, or an auto-detected
+  `DEEPSEEK_API_KEY` / `QWEN_API_KEY` / `OPENROUTER_API_KEY`) — there is no database here,
+  so the app's Providers page is unreachable.
+- **Stage the run.** `--stop-after match` does identification only — nothing is masked and
+  nothing leaves the machine; read `match-report.csv`, then re-run with `--force`.
+  `--stop-after mask` also writes the masked pages and `masked-preview.jpg`, so you can see
+  exactly what *would* be sent before spending a token. Neither needs a provider. Each stage
+  clears its own output before rewriting it, but a stage a run never reaches clears nothing:
+  after `--stop-after match` into an `--out` from a full run, `masked/` and `bundle/` are
+  still the *previous* run's — the report's empty `provider`/`model` fields are how you tell.
+- **Where identity lives.** `--id-regions FILE` (recommended) is the same
+  `{"version":1,"regions":[{"kind":"student_id","x":…,"y":…,"w":…,"h":…}]}` geometry the
+  app's mask-region editor produces; kinds are `student_id`, `name`, `problem_id`. Without
+  it the fallback is `--id-band 0.18`: one full-width strip across the top of the page, read
+  ONCE, with all three fields scored as substrings of that same strip — so an id candidate
+  can score against text sitting in the name box, and masking covers the whole band
+  including the problem number. It needs no configuration and it is looser on both counts;
+  draw the regions if you can.
+
+Prerequisites (the same local-OCR rung the server uses, D24):
+
+- `make ocr-models` — downloads PP-OCRv5 server rec (~85 MB) + `ppocrv5_dict.txt` into `data/ocr/`.
+- **onnxruntime >= 1.27** installed on the machine (`brew install onnxruntime`, or a distro package).
+- Export all three: `ADAMARKER_OCR_MODEL`, `ADAMARKER_OCR_KEYS`, `ADAMARKER_ONNXRUNTIME`.
+  Unlike the server, this mode *hard-fails* without them (exit 6): reading identity locally is
+  what makes masking possible before anything is sent.
+- Optional `ADAMARKER_REPORT_FONT` (`make report-fonts`) — embeds the CJK font path in the
+  bundle's LaTeX preamble; without it the preamble falls back to the family name
+  "Noto Sans TC", which must then be installed or every Chinese glyph is silently dropped.
+
+Artifacts, all written under `--out` at 0600/0700 (every byte of it is student work):
+
+```
+run.log             one line per stage, with timings — page indices only, never identity
+pages/pNNNN.jpg     every scanned page, as rendered
+crops/              what the local OCR actually looked at (per page, per region)
+match-report.csv    who each page was assigned to, and how confident   <- CHECK THIS
+match-report.json   the same rows unrounded, plus the run's settings
+unmatched/pNNNN.jpg the pages nobody could place (originals, for you to sort by hand)
+masked/pNNNN.jpg    the only bytes that leave this machine
+masked-preview.jpg  contact sheet of what the model saw where identity used to be  <- CHECK THIS
+                    (60 tiles per sheet; overflow sheets are -02, -03, …)
+bundle/{exam}-pN/   the professor's export: MANIFEST.csv, tex/, typ/, images/, _all.{tex,typ}
+```
+
+Before trusting a single line of output, open **`match-report.csv`** (sort by `status`:
+`forced` rows are the ones the solver moved off the page's own best guess) and
+**`masked-preview.jpg`** (if identity is still visible there, it was still visible to the API).
+Unmatched rows carry a `reason`: `surplus` (more pages than roster×problem cells), `low-score`
+(nothing on the page could be read), `ambiguous` (another student explains it nearly as well),
+or `id-conflict` (the ID box legibly reads an ID that is not the assigned student's — three or
+more edits away — so the assignment was vetoed however confident it looked).
+
+| Exit | Meaning |
+|---|---|
+| 0 | success |
+| 1 | unclassified failure — including a Ctrl-C, which leaves the artifacts written so far |
+| 2 | bad arguments, or `--help` |
+| 3 | roster missing, unreadable, or unparseable |
+| 4 | scan file missing, unreadable, or undecodable |
+| 5 | `--out` unusable (not a directory, unwritable, or non-empty without `--force`) |
+| 6 | local OCR unavailable or failed to load |
+| 7 | `--id-regions` file invalid |
+| 8 | provider unconfigured, or every transcription call failed |
+| 9 | zero pages matched — the reports are still written; read them |
+
+Honest limits:
+
+- **Wrong-student assignments are possible by design.** A forced matcher has no "I don't
+  know" for a page it can score: scores are posteriors over *this roster*, so "not on it"
+  is not a hypothesis the matcher can hold. One case is caught — a page whose ID box
+  *legibly* reads a different ID (a run of ≥ 5 characters **containing a digit**, at
+  ≥ 0.90 recognizer confidence, ≥ 3 edits from the assigned student, with no other
+  qualifying line agreeing) is vetoed as `id-conflict` — but an ID that is smudged,
+  cropped, or misread into a near-miss is not, and neither is a page identified purely on
+  its name. Review the `forced` rows, and don't hand out grades from a run nobody read the
+  report of.
+- **Draw `--id-regions` around the handwritten value, not the printed label.** A crop that
+  includes "Student ID" gives the recognizer a crisp printed line that outscores the
+  handwriting beside it. The `id-conflict` veto ignores digitless readings for exactly this
+  reason, but a tight crop is still the better answer: everything downstream — scoring,
+  masking, the preview sheet — works on what you drew.
+- The `--min-score` / `--min-margin` defaults (0.15 / 0.03) are tuned on the synthetic,
+  *printed* demo fixtures in `data/demo/`, not on real handwriting. Real scans are worse.
+  Raise them to set more aside; lower them to place more, and read every row.
+- Matching leans on the student-ID box (weight 0.45, against name 0.30 and problem 0.25,
+  never renormalized). When the id box is unreadable, a name and a problem number alone
+  rarely clear the margin against a full class — those pages land in `unmatched/`. The
+  name channel is also the least exercised end to end: the committed `data/demo/` PDFs
+  reference a CJK font they do not embed, so their name boxes render blank under this
+  renderer and the 0.30 name term is covered by unit tests only.
+- Pages set aside are never sent to the API and never appear in the bundle; they are copied
+  into `unmatched/` as the *original* (unmasked) page, because a human on this machine has
+  to look at them to place them.
+
+The end-to-end test over the demo piles lives in `internal/offline/integration_test.go` and is
+skipped unless all three of `ADAMARKER_OCR_MODEL`, `ADAMARKER_OCR_KEYS` and
+`ADAMARKER_ONNXRUNTIME` are set (the third does not match an `ADAMARKER_OCR_*` glob).
 
 ## Develop
 

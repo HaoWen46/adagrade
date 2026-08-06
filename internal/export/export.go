@@ -236,14 +236,28 @@ func BuildExamZIP(in ExamInput) ([]byte, error) {
 	return buildArchive(problems, in.RootDir()+"/")
 }
 
-// buildArchive is the one path both public builders take: validate everything,
-// preflight the size, write each problem's entries under prefix, then seal.
+// buildArchive is the one path both public builders take: assemble the entries,
+// then seal them into a ZIP.
+func buildArchive(problems []Input, prefix string) ([]byte, error) {
+	entries, err := archiveEntries(problems, prefix)
+	if err != nil {
+		return nil, err
+	}
+	return writeArchive(entries)
+}
+
+// archiveEntries is the whole bundle minus the ZIP framing: validate
+// everything, preflight the size, assemble each problem's entries under prefix.
+// It is the single source of truth for WHAT a bundle contains — buildArchive
+// zips the result, Files (dir.go) hands the same list to a caller writing a
+// directory, and neither can drift from the other because there is only one
+// assembler.
 //
 // Order matters and is preserved from the original single-problem builder:
 // validation first (so an unusable student id is reported as such rather than as
 // a size failure), then the preflight (so an oversized cohort fails before
 // anything is materialised), then assembly.
-func buildArchive(problems []Input, prefix string) ([]byte, error) {
+func archiveEntries(problems []Input, prefix string) ([]entry, error) {
 	valid := make([][]Answer, len(problems))
 	for i, in := range problems {
 		answers, err := in.validated()
@@ -285,7 +299,7 @@ func buildArchive(problems []Input, prefix string) ([]byte, error) {
 		}
 		entries = append(entries, es...)
 	}
-	return writeArchive(entries)
+	return entries, nil
 }
 
 // AllTeX returns the exact _all.tex source BuildZIP would place in this

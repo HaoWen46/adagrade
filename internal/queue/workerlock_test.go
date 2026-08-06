@@ -14,8 +14,8 @@ import (
 // releases. This is the guard that stops a stale ./bin/adamarker zombie from
 // grading new jobs with old code against the shared dev DB.
 func TestAcquireWorkerLock_SecondFailsWhileHeld(t *testing.T) {
-	// storetest.Fresh both skips without a test DB and serializes DB-backed tests
-	// across packages via its own advisory lock — so no other package's worker
+	// storetest.Fresh both skips without a test DB and gives this test its own
+	// database — advisory locks are database-scoped, so no other test's worker
 	// lock can be held concurrently and flake this test.
 	st := storetest.Fresh(t)
 	dsn := storetest.DSN(t)
