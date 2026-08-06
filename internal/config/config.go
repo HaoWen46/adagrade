@@ -526,6 +526,25 @@ func parseShutdownDrain(raw string) (time.Duration, error) {
 	return d, nil
 }
 
+// LoadProviders resolves the LLM provider table from environment variables
+// alone: ADAMARKER_PROVIDERS with its per-provider
+// ADAMARKER_PROVIDER_<NAME>_{KIND,BASE_URL,API_KEY}, or — when that list is
+// empty — the auto-detected vendor keys (DEEPSEEK_API_KEY, QWEN_API_KEY,
+// OPENROUTER_API_KEY, each with an optional <VENDOR>_BASE_URL override). See
+// loadProviders below for the exact rules; this is a thin export of it.
+//
+// It touches no database and needs no ADAMARKER_DATABASE_URL, and it skips the
+// rest of Load — including the production validation that DOES require a
+// database URL. Offline tooling uses it to construct an LLM client without the
+// server's app-managed registry (D11 v1), which is unreachable without a
+// database.
+//
+// No configured keys is not an error: it returns an empty table and nil, and
+// the caller decides whether it can proceed with nothing.
+func LoadProviders(getenv func(string) string) ([]Provider, error) {
+	return loadProviders(getenv)
+}
+
 // loadProviders resolves LLM providers. An explicit ADAMARKER_PROVIDERS list wins;
 // otherwise well-known vendor keys (DEEPSEEK_API_KEY, QWEN_API_KEY) are auto-detected
 // with their documented default base URLs (D11).

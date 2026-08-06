@@ -340,6 +340,136 @@ func TestLoad_ExplicitProviderMissingKeyFails(t *testing.T) {
 	}
 }
 
+// --- LoadProviders (env-only, no database) --------------------------------
+//
+// LoadProviders is the same resolution Load performs, reachable without
+// building a whole Config. Offline tooling (the standalone `offline-grade`
+// CLI) has no database and no server, so it cannot go through the app-managed
+// llm_providers registry; the env table is the only provider source it has.
+
+// TestLoadProviders_EmptyEnvYieldsAnEmptyTable — no keys configured is a
+// legitimate state, not an error: the caller decides whether it can proceed
+// with nothing, and its message about that is better than one from here.
+func TestLoadProviders_EmptyEnvYieldsAnEmptyTable(t *testing.T) {
+	got, err := LoadProviders(envMap(nil))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %d providers, want none (%+v)", len(got), got)
+	}
+}
+
+func TestLoadProviders_ParsesAnExplicitlyDeclaredProvider(t *testing.T) {
+	got, err := LoadProviders(envMap(map[string]string{
+		"ADAMARKER_PROVIDERS":                 "gateway",
+		"ADAMARKER_PROVIDER_GATEWAY_BASE_URL": "https://llm.example.com/v1",
+		"ADAMARKER_PROVIDER_GATEWAY_API_KEY":  "sk-x",
+		"ADAMARKER_PROVIDER_GATEWAY_KIND":     "openai-compat",
+		"DEEPSEEK_API_KEY":                    "sk-ignored", // the explicit list wins
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d providers, want 1 (%+v)", len(got), got)
+	}
+	want := Provider{
+		Name:    "gateway",
+		Kind:    ProviderKindOpenAICompat,
+		BaseURL: "https://llm.example.com/v1",
+		APIKey:  "sk-x",
+	}
+	if got[0] != want {
+		t.Errorf("provider = %+v, want %+v", got[0], want)
+	}
+}
+
+func TestLoadProviders_AutoDetectsAVendorKey(t *testing.T) {
+	got, err := LoadProviders(envMap(map[string]string{"DEEPSEEK_API_KEY": "sk-deepseek"}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d providers, want 1 (%+v)", len(got), got)
+	}
+	want := Provider{
+		Name:    "deepseek",
+		Kind:    ProviderKindAnthropicCompat,
+		BaseURL: "https://api.deepseek.com/anthropic",
+		APIKey:  "sk-deepseek",
+	}
+	if got[0] != want {
+		t.Errorf("provider = %+v, want %+v", got[0], want)
+	}
+}
+
+// TestLoadProviders_RejectsAnIncompleteDeclaration — a half-configured
+// provider must fail at load, not at the first API call in the middle of a
+// grading run.
+func TestLoadProviders_RejectsAnIncompleteDeclaration(t *testing.T) {
+	if _, err := LoadProviders(envMap(map[string]string{
+		"ADAMARKER_PROVIDERS":                  "myvendor",
+		"ADAMARKER_PROVIDER_MYVENDOR_BASE_URL": "https://llm.example.com/anthropic",
+	})); err == nil {
+		t.Error("a provider listed without an API key must fail loudly")
+	}
+	if _, err := LoadProviders(envMap(map[string]string{
+		"ADAMARKER_PROVIDERS":                 "gateway",
+		"ADAMARKER_PROVIDER_GATEWAY_BASE_URL": "https://llm.example.com/v1",
+		"ADAMARKER_PROVIDER_GATEWAY_API_KEY":  "sk-x",
+		"ADAMARKER_PROVIDER_GATEWAY_KIND":     "soap",
+	})); err == nil {
+		t.Error("an unknown provider kind must fail loudly")
+	}
+}
+
+// TestLoadProviders_AgreesWithLoad keeps the exported wrapper and the field
+// Load populates from drifting apart — they must stay one resolution, not two.
+func TestLoadProviders_AgreesWithLoad(t *testing.T) {
+	env := map[string]string{
+		"DEEPSEEK_API_KEY":   "sk-deepseek",
+		"QWEN_API_KEY":       "sk-qwen",
+		"OPENROUTER_API_KEY": "sk-or-abc",
+	}
+	full, err := Load(envMap(env))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got, err := LoadProviders(envMap(env))
+	if err != nil {
+		t.Fatalf("LoadProviders: %v", err)
+	}
+	if len(got) != len(full.Providers) {
+		t.Fatalf("LoadProviders returned %d providers, Load resolved %d", len(got), len(full.Providers))
+	}
+	for i := range got {
+		if got[i] != full.Providers[i] {
+			t.Errorf("provider %d = %+v, Load has %+v", i, got[i], full.Providers[i])
+		}
+	}
+}
+
+// TestLoadProviders_NeedsNoDatabaseURL — the whole point of exporting it: the
+// offline CLI has no database, and requiring the production Config validation
+// (which does require one) would make the env table unreachable.
+func TestLoadProviders_NeedsNoDatabaseURL(t *testing.T) {
+	env := map[string]string{
+		envEnv:             "production",
+		"DEEPSEEK_API_KEY": "sk-deepseek",
+	}
+	if _, err := Load(envMap(env)); err == nil {
+		t.Fatal("Load must still require a database URL in production — otherwise this test proves nothing")
+	}
+	got, err := LoadProviders(envMap(env))
+	if err != nil {
+		t.Fatalf("LoadProviders must not require a database URL: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d providers, want 1 (%+v)", len(got), got)
+	}
+}
+
 // --- Local OCR (D24) -----------------------------------------------------
 //
 // All three env vars are optional and never required to Load successfully —
