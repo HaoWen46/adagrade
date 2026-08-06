@@ -725,3 +725,167 @@ func TestRun_UnknownStopAfterIsRejectedAtEntry(t *testing.T) {
 	// Refused before the output directory was touched.
 	requireAbsent(t, f.out)
 }
+
+// --- stale artifacts from a previous run -----------------------------------
+
+// TestRun_ForceClearsThePreviousRunsArtifacts — --force means "this run replaces
+// what is in this directory", and the README's recommended workflow relies on it
+// (--stop-after match, read the report, re-run with --force). Most of the
+// artifact tree is named after its CONTENT, so rewriting is not enough: a
+// leftover unmatched/pNNNN.jpg claims a page went unplaced in a run whose report
+// says it matched, a leftover overflow preview sheet claims pages were sent that
+// were not, and a leftover bundle tree hands the professor an exam that no
+// longer exists under that name. doc.go calls these artifacts the audit trail;
+// an audit trail that mixes two runs is worse than none.
+func TestRun_ForceClearsThePreviousRunsArtifacts(t *testing.T) {
+	f := newRunFixture(t, 3, 3, 1)
+	f.useProvider(transcriptionServer(t, nil).URL)
+	f.opts.Force = true
+
+	// A previous run's leavings, one per owned path. The names are all ones
+	// this run will NOT produce: a page index past the batch, the other region
+	// mode's crop, an overflow preview sheet, a bundle under an older
+	// --exam-name.
+	stale := []string{
+		filepath.Join(pagesDirName, PageFilename(9999)),
+		filepath.Join(cropsDirName, CropFilename(9999, KindStudentID)),
+		filepath.Join(unmatchedDirName, PageFilename(9999)),
+		filepath.Join(maskedDirName, PageFilename(9999)),
+		"masked-preview-02.jpg",
+		filepath.Join(bundleDirName, "older-exam-p1", "MANIFEST.csv"),
+	}
+	for _, rel := range stale {
+		path := f.path(rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatalf("seed %s: %v", path, err)
+		}
+		if err := os.WriteFile(path, []byte("a previous run"), 0o600); err != nil {
+			t.Fatalf("seed %s: %v", path, err)
+		}
+	}
+
+	// Without --force the same directory is refused outright: clearing is what
+	// --force licenses, not a replacement for it.
+	noForce := f.opts
+	noForce.Force = false
+	if _, err := Run(context.Background(), noForce, f.deps); ExitCode(err) != ExitOutDir {
+		t.Fatalf("a non-empty --out without --force: ExitCode = %d (err %v), want %d", ExitCode(err), err, ExitOutDir)
+	}
+	// ...and it is refused BEFORE anything is deleted.
+	requireFile(t, f.path(stale[0]))
+
+	if _, err := Run(context.Background(), f.opts, f.deps); err != nil {
+		t.Fatalf("Run: %v\nstderr:\n%s", err, f.stderr.String())
+	}
+
+	for _, rel := range stale {
+		requireAbsent(t, f.path(rel))
+	}
+	// The stale bundle's whole tree went, not just the file inside it.
+	requireAbsent(t, f.path(bundleDirName, "older-exam-p1"))
+	// And this run's own artifacts are there, so the clearing ran BEFORE each
+	// stage rather than after it.
+	for _, rel := range []string{
+		filepath.Join(pagesDirName, PageFilename(1)),
+		filepath.Join(cropsDirName, bandCropFilename(1)),
+		filepath.Join(maskedDirName, PageFilename(1)),
+		maskPreviewName,
+		matchCSVName,
+	} {
+		requireFile(t, f.path(rel))
+	}
+}
+
+// TestRun_ClearingIsScopedToTheRunsOwnArtifacts — an operator's --out is often a
+// directory they keep other things in (the roster they matched against, notes, a
+// previous run's zip). --force licenses replacing the artifacts this mode
+// writes, and nothing else.
+func TestRun_ClearingIsScopedToTheRunsOwnArtifacts(t *testing.T) {
+	f := newRunFixture(t, 3, 3, 1)
+	f.opts.Force = true
+	f.opts.StopAfter = StopAfterMask
+
+	if err := os.MkdirAll(f.out, 0o700); err != nil {
+		t.Fatalf("mkdir out: %v", err)
+	}
+	keep := []string{"notes.txt", "roster-copy.csv", "masked-preview.txt", "pages.txt"}
+	for _, name := range keep {
+		writeFile(t, f.out, name, "the operator's own file")
+	}
+	if err := os.MkdirAll(filepath.Join(f.out, "my-notes"), 0o700); err != nil {
+		t.Fatalf("mkdir my-notes: %v", err)
+	}
+	writeFile(t, filepath.Join(f.out, "my-notes"), "keep.txt", "mine")
+
+	if _, err := Run(context.Background(), f.opts, f.deps); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	for _, name := range keep {
+		requireFile(t, f.path(name))
+	}
+	requireFile(t, f.path("my-notes", "keep.txt"))
+}
+
+// TestRun_MatchJSONRecordsTheRunsSettings — the JSON report is the only place a
+// run's own settings survive. Six months later "why did this page match" is
+// answerable only if the report says which thresholds, which render resolution
+// and which model produced it.
+func TestRun_MatchJSONRecordsTheRunsSettings(t *testing.T) {
+	readMeta := func(t *testing.T, out string) Meta {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(out, matchJSONName))
+		if err != nil {
+			t.Fatalf("read the JSON report: %v", err)
+		}
+		var doc struct {
+			Meta Meta `json:"meta"`
+		}
+		if err := json.Unmarshal(data, &doc); err != nil {
+			t.Fatalf("unmarshal the JSON report: %v", err)
+		}
+		return doc.Meta
+	}
+
+	t.Run("full run names the provider it sent to", func(t *testing.T) {
+		f := newRunFixture(t, 3, 3, 1)
+		srv := transcriptionServer(t, nil)
+		f.useProvider(srv.URL)
+		f.opts.ExamName = "midterm-1"
+
+		if _, err := Run(context.Background(), f.opts, f.deps); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		m := readMeta(t, f.out)
+		if m.DPI != DefaultDPI || m.LongEdge != DefaultLongEdge || m.JPEGQuality != DefaultJPEGQuality {
+			t.Errorf("render settings = %d dpi / %d long edge / %d quality", m.DPI, m.LongEdge, m.JPEGQuality)
+		}
+		if m.ExamName != "midterm-1" {
+			t.Errorf("exam_name = %q, want the run's --exam-name", m.ExamName)
+		}
+		// The route as the operator spelled it — the --base-url here, since no
+		// provider table was involved.
+		if m.Provider != srv.URL || m.Model != "test-model" {
+			t.Errorf("provider/model = %q/%q, want %q/%q", m.Provider, m.Model, srv.URL, "test-model")
+		}
+		// Never the key itself, nor the name of the variable holding it.
+		if strings.Contains(m.Provider, "sk-test") || strings.Contains(m.Provider, "OFFLINE_TEST_KEY") {
+			t.Errorf("the report leaked the API key configuration: %q", m.Provider)
+		}
+	})
+
+	t.Run("stop-after run names no provider", func(t *testing.T) {
+		f := newRunFixture(t, 3, 3, 1)
+		f.opts.StopAfter = StopAfterMatch
+
+		if _, err := Run(context.Background(), f.opts, f.deps); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		// Empty is the fact worth recording: nothing was sent anywhere.
+		if m := readMeta(t, f.out); m.Provider != "" || m.Model != "" {
+			t.Errorf("provider/model = %q/%q on a --stop-after run, want both empty", m.Provider, m.Model)
+		}
+	})
+}

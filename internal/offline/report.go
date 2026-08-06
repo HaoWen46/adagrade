@@ -30,6 +30,16 @@ const scoreFormat = "%.6f"
 // difference between a report you can reproduce and a list of numbers — an
 // operator looking at a match six months later needs to know which roster, which
 // thresholds and which identity regions produced it.
+//
+// Fields are APPEND-ONLY, for the same reason matchCSVHeader's columns are: a
+// reader written against an older report must keep working. New settings go at
+// the end; existing ones are never renamed, retyped or reordered.
+//
+// The rendering settings are here because they change what the recognizer saw:
+// two runs of the same pile at different --dpi or --long-edge can disagree about
+// a page, and "which run produced this" is unanswerable without them. Provider
+// and Model record who transcribed it; both are EMPTY on a --stop-after run,
+// which is itself the fact worth recording — nothing was sent.
 type Meta struct {
 	Roster      string     `json:"roster"`
 	Scans       []string   `json:"scans"`
@@ -40,6 +50,14 @@ type Meta struct {
 	IDBand      float64    `json:"id_band"`
 	IDRegions   string     `json:"id_regions"` // path, empty when the band fallback was used
 	GeneratedAt time.Time  `json:"generated_at"`
+
+	// Appended after the fields above; see the append-only note.
+	DPI         int    `json:"dpi"`
+	LongEdge    int    `json:"long_edge"`
+	JPEGQuality int    `json:"jpeg_quality"`
+	ExamName    string `json:"exam_name"`
+	Provider    string `json:"provider"` // --provider name or --base-url; empty when nothing was sent
+	Model       string `json:"model"`    // empty when nothing was sent
 }
 
 // matchJSON is one result as the JSON report writes it: the same field names as

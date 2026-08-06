@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/HaoWen46/adagrade/internal/llm"
@@ -27,6 +28,11 @@ import (
 //	<out>/masked/pNNNN.jpg     the only bytes that may leave this machine
 //	<out>/masked-preview.jpg   what the model saw where identity used to be
 //	<out>/bundle/              the professor's export, one tree per problem
+//
+// Every directory in that tree, plus the masked-preview sheets, is CLEARED by
+// the stage that owns it before it writes (clearOwned): --force means "this run
+// replaces what is here", and an artifact left over from a previous run is a
+// statement about the batch that the current report contradicts.
 const (
 	runLogName       = "run.log"
 	pagesDirName     = "pages"
@@ -213,6 +219,9 @@ func Run(ctx context.Context, o Options, d Deps) (Summary, error) {
 
 	// 4. Render.
 	started = time.Now()
+	if err := clearOwned(o.Out, pagesDirName); err != nil {
+		return summary, err
+	}
 	pages, err := RenderPages(ctx, d.Renderer, o.Scans, filepath.Join(o.Out, pagesDirName), o.DPI, o.LongEdge, o.JPEGQuality)
 	if cerr := ctx.Err(); cerr != nil {
 		// Before err, so a cancelled render is reported as a cancellation rather
@@ -229,6 +238,9 @@ func Run(ctx context.Context, o Options, d Deps) (Summary, error) {
 	// behind its own mutex, so a worker pool here would buy nothing and would
 	// break the "Nth crop is the Nth page" property the artifacts rely on.
 	started = time.Now()
+	if err := clearOwned(o.Out, cropsDirName); err != nil {
+		return summary, err
+	}
 	cropsDir := filepath.Join(o.Out, cropsDirName)
 	reads := make([]PageRead, 0, len(pages))
 	for _, page := range pages {
@@ -268,6 +280,9 @@ func Run(ctx context.Context, o Options, d Deps) (Summary, error) {
 		return summary, err
 	}
 	summary.Artifacts = append(summary.Artifacts, csvPath, jsonPath)
+	if err := clearOwned(o.Out, unmatchedDirName); err != nil {
+		return summary, err
+	}
 	unmatchedDir, unmatchedCount, err := writeUnmatched(o.Out, results)
 	if err != nil {
 		return summary, err
@@ -309,6 +324,9 @@ func Run(ctx context.Context, o Options, d Deps) (Summary, error) {
 	// has no cell to be transcribed into and no reason to be prepared for the
 	// API; it stays in unmatched/ as the original the operator has to look at.
 	started = time.Now()
+	if err := clearOwned(o.Out, maskedDirName, maskPreviewGlob); err != nil {
+		return summary, err
+	}
 	masked, err := MaskPages(matchedPages(results), regions, o.JPEGQuality, filepath.Join(o.Out, maskedDirName))
 	if err != nil {
 		return summary, err
@@ -370,6 +388,9 @@ func Run(ctx context.Context, o Options, d Deps) (Summary, error) {
 
 	// 14. The professor's bundle.
 	started = time.Now()
+	if err := clearOwned(o.Out, bundleDirName); err != nil {
+		return summary, err
+	}
 	bundleDir := filepath.Join(o.Out, bundleDirName)
 	if err := WriteBundle(bundleDir, o.ExamName, docs, rows, o.Problems, getenv(cjkFontEnv)); err != nil {
 		return summary, err
@@ -392,6 +413,54 @@ func Run(ctx context.Context, o Options, d Deps) (Summary, error) {
 // honest unclassified 1.
 func cancelledDuring(stage, outDir string, cause error) error {
 	return fmt.Errorf("offline: the run was cancelled during %s; the artifacts written so far are in %s: %w", stage, outDir, cause)
+}
+
+// maskPreviewGlob matches the preview sheet and every overflow sheet
+// (masked-preview.jpg, masked-preview-02.jpg, …). It is a name PATTERN rather
+// than a name, and clearOwned treats it as one.
+const maskPreviewGlob = "masked-preview*.jpg"
+
+// clearOwned deletes the named entries of outDir before the stage that owns them
+// writes its own.
+//
+// WHY A RUN DELETES THINGS AT ALL. --force licenses writing into a directory
+// that already holds a run, and the README's recommended workflow does exactly
+// that: --stop-after match, read the report, re-run with --force. Rewriting is
+// not enough, because most of these artifacts are named after their CONTENT
+// rather than being a single fixed file. Run 1's unmatched/p0005.jpg survives a
+// run 2 in which page 5 matched; masked-preview-02.jpg survives a run that needs
+// one sheet; bundle/{old-slug}-p1/ survives an --exam-name change; pages/ and
+// crops/ keep the tail of a longer batch, and crops/ additionally keeps the
+// OTHER region mode's files when --id-regions is added or dropped
+// (p0001-band.jpg beside p0001-student_id.jpg). doc.go's claim that these
+// artifacts ARE the audit trail is false the moment one of them describes a run
+// that is no longer the run the report describes.
+//
+// So every stage clears what it owns, and only what it owns: each name is a
+// package constant joined onto outDir, never operator input, and nothing outside
+// outDir is touched. The four fixed files (run.log, the two match reports) are
+// overwritten wholesale by their own writers and need no clearing.
+//
+// A name containing '*' is treated as a glob within outDir; a failed match
+// pattern is a programming error and would be caught by any test that runs a
+// stage.
+func clearOwned(outDir string, names ...string) error {
+	for _, name := range names {
+		targets := []string{filepath.Join(outDir, name)}
+		if strings.ContainsRune(name, '*') {
+			matches, err := filepath.Glob(filepath.Join(outDir, name))
+			if err != nil {
+				return newOutDirError(err, "cannot list %s in the output directory %s", name, outDir)
+			}
+			targets = matches
+		}
+		for _, target := range targets {
+			if err := os.RemoveAll(target); err != nil {
+				return newOutDirError(err, "cannot clear the previous run's %s: remove it by hand, or pick an empty --out", target)
+			}
+		}
+	}
+	return nil
 }
 
 // writerOr defaults a nil stream to io.Discard, so a caller that only wants the
@@ -431,6 +500,11 @@ func readRegionCount(regions RegionSet) int {
 
 // runMeta is the settings block the JSON report carries, so a report read six
 // months later still says which roster and which thresholds produced it.
+//
+// Provider is the route as the operator SPELLED it — the --provider name or the
+// --base-url — and never the key, which is not in Options at all (only the name
+// of the variable holding it). Both it and Model are empty on a --stop-after
+// run, because nothing was sent.
 func runMeta(o Options) Meta {
 	return Meta{
 		Roster:      o.Roster,
@@ -442,7 +516,35 @@ func runMeta(o Options) Meta {
 		IDBand:      o.IDBand,
 		IDRegions:   o.IDRegions,
 		GeneratedAt: time.Now().UTC(),
+		DPI:         o.DPI,
+		LongEdge:    o.LongEdge,
+		JPEGQuality: o.JPEGQuality,
+		ExamName:    o.ExamName,
+		Provider:    providerRoute(o),
+		Model:       transcribedModel(o),
 	}
+}
+
+// providerRoute names the transcription route for the report: the --provider
+// name, or the --base-url when the table was bypassed. Empty when the run stops
+// before the API stage.
+func providerRoute(o Options) string {
+	switch {
+	case o.StopAfter != "":
+		return ""
+	case o.Provider != "":
+		return o.Provider
+	}
+	return o.BaseURL
+}
+
+// transcribedModel is the model the run actually called, which is nothing at all
+// when --stop-after cut the pipeline short of the API stage.
+func transcribedModel(o Options) string {
+	if o.StopAfter != "" {
+		return ""
+	}
+	return o.Model
 }
 
 // countMatches tallies the match stage into the summary.

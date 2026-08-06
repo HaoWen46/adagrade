@@ -77,6 +77,12 @@ func reportMeta() Meta {
 		IDBand:      DefaultIDBand,
 		IDRegions:   "",
 		GeneratedAt: time.Date(2026, 7, 15, 9, 30, 0, 0, time.UTC),
+		DPI:         DefaultDPI,
+		LongEdge:    DefaultLongEdge,
+		JPEGQuality: DefaultJPEGQuality,
+		ExamName:    "midterm",
+		Provider:    "deepseek",
+		Model:       "test-model",
 	}
 }
 
@@ -221,6 +227,12 @@ func TestWriteMatchJSON_ShapeAndMeta(t *testing.T) {
 			IDBand      float64    `json:"id_band"`
 			IDRegions   string     `json:"id_regions"`
 			GeneratedAt time.Time  `json:"generated_at"`
+			DPI         int        `json:"dpi"`
+			LongEdge    int        `json:"long_edge"`
+			JPEGQuality int        `json:"jpeg_quality"`
+			ExamName    string     `json:"exam_name"`
+			Provider    string     `json:"provider"`
+			Model       string     `json:"model"`
 		} `json:"meta"`
 		Results []struct {
 			Page         int     `json:"page"`
@@ -278,6 +290,15 @@ func TestWriteMatchJSON_ShapeAndMeta(t *testing.T) {
 	}
 	if !m.GeneratedAt.Equal(time.Date(2026, 7, 15, 9, 30, 0, 0, time.UTC)) {
 		t.Errorf("meta generated_at = %v", m.GeneratedAt)
+	}
+	// The rendering settings decide what the recognizer actually saw, so two
+	// runs of one pile that disagree about a page are only distinguishable with
+	// them in the report.
+	if m.DPI != DefaultDPI || m.LongEdge != DefaultLongEdge || m.JPEGQuality != DefaultJPEGQuality {
+		t.Errorf("meta rendering settings = dpi %d, long_edge %d, jpeg_quality %d", m.DPI, m.LongEdge, m.JPEGQuality)
+	}
+	if m.ExamName != "midterm" || m.Provider != "deepseek" || m.Model != "test-model" {
+		t.Errorf("meta run identity = exam %q, provider %q, model %q", m.ExamName, m.Provider, m.Model)
 	}
 
 	// The page image bytes must not travel into the report.
