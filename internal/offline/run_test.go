@@ -55,9 +55,16 @@ type scriptedReader struct {
 	err   error
 }
 
-func (r *scriptedReader) ReadLattices(_ context.Context, _ imaging.IDCrop) ([]localocr.LineLattice, error) {
+func (r *scriptedReader) ReadLattices(ctx context.Context, _ imaging.IDCrop) ([]localocr.LineLattice, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// The real engine propagates ctx and surfaces a cancellation as a read
+	// failure, which ReadIdentity types as an *OCRError. The stub does the same,
+	// so a test can tell whether Run reports a Ctrl-C as a cancellation or as a
+	// broken local OCR install.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	call := r.calls
 	r.calls++
 	if r.err != nil {
@@ -640,4 +647,81 @@ func TestRun_CancelledCellsAreNotReportedAsFailures(t *testing.T) {
 	if !strings.Contains(log, "the run was cancelled") {
 		t.Errorf("cancelled cells should say so:\n%s", log)
 	}
+}
+
+// TestRun_CancellationDuringTheReadStageIsNotAnOCRFailure — the read stage is
+// the longest in the run, so it is where a Ctrl-C actually lands, and it hands
+// ctx to the OCR engine: a cancellation comes back out of ReadIdentity typed as
+// an *OCRError (exit 6). Reporting that would tell an operator who changed
+// their mind to go reinstall onnxruntime.
+func TestRun_CancellationDuringTheReadStageIsNotAnOCRFailure(t *testing.T) {
+	f := newRunFixture(t, 3, 4, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	scripted := f.reader.lines
+	f.reader.lines = func(call int) []localocr.LineLattice {
+		if call == 1 {
+			cancel() // partway through the batch, with pages already read
+		}
+		return scripted(call)
+	}
+
+	_, err := Run(ctx, f.opts, f.deps)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want a cancellation", err)
+	}
+	if errors.As(err, new(*OCRError)) {
+		t.Errorf("a cancelled run must not be reported as a local-OCR failure: %v", err)
+	}
+	if got := ExitCode(err); got != ExitFailure {
+		t.Errorf("ExitCode = %d, want %d: a cancellation is nobody's misconfiguration", got, ExitFailure)
+	}
+	if !strings.Contains(err.Error(), "cancelled") {
+		t.Errorf("the message should say the run was cancelled: %v", err)
+	}
+
+	// What was read before the stop is still on disk, and nothing downstream ran.
+	requireFile(t, f.path(pagesDirName, PageFilename(1)))
+	requireFile(t, f.path(cropsDirName, bandCropFilename(1)))
+	requireAbsent(t, f.path(matchCSVName))
+	requireAbsent(t, f.path(maskedDirName))
+}
+
+// TestRun_CancellationBeforeRenderStopsAtTheRenderStage — the same guard one
+// stage earlier. The renderer types its own cancellation as "cannot render page
+// N" (*ScanError, exit 4), which would send the operator to re-export a scan
+// that is fine.
+func TestRun_CancellationBeforeRenderStopsAtTheRenderStage(t *testing.T) {
+	f := newRunFixture(t, 3, 3, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := Run(ctx, f.opts, f.deps)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want a cancellation", err)
+	}
+	if errors.As(err, new(*ScanError)) {
+		t.Errorf("a cancelled run must not be reported as a bad scan file: %v", err)
+	}
+	// The read stage never started.
+	requireAbsent(t, f.path(cropsDirName))
+}
+
+// TestRun_UnknownStopAfterIsRejectedAtEntry — an out-of-band stage name from a
+// programmatic caller (one that never went through ParseArgs) passes both stage
+// gates and reaches the transcription stage with no provider built. It is
+// refused before any work, not discovered by a nil dereference.
+func TestRun_UnknownStopAfterIsRejectedAtEntry(t *testing.T) {
+	f := newRunFixture(t, 3, 3, 1)
+	f.opts.StopAfter = "matched" // a plausible typo for "match"
+
+	_, err := Run(context.Background(), f.opts, f.deps)
+	if got := ExitCode(err); got != ExitUsage {
+		t.Fatalf("ExitCode = %d (err %v), want %d", got, err, ExitUsage)
+	}
+	if !strings.Contains(err.Error(), "--stop-after") {
+		t.Errorf("the message should name the option: %v", err)
+	}
+	// Refused before the output directory was touched.
+	requireAbsent(t, f.out)
 }

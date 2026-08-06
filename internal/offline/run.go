@@ -101,6 +101,19 @@ func (s Summary) UnmatchedTotal() int {
 // to Stderr as it finishes. Failures are the typed errors of flags.go, so the
 // caller turns them into exit codes with ExitCode and never matches on strings.
 //
+// o must satisfy ParseArgs' invariants. Run re-checks the one that is not
+// self-correcting — StopAfter — because an out-of-band value would fall through
+// both stage gates and reach the transcription stage with no provider built.
+//
+// CANCELLATION IS CHECKED AFTER EVERY LONG STAGE, not only before the bundle.
+// Render and read both propagate ctx into their collaborators, which report a
+// cancellation as the failure it looked like from inside: the renderer as "cannot
+// render page N" (*ScanError, exit 4) and the OCR engine as "local OCR failed"
+// (*OCRError, exit 6). An operator who pressed Ctrl-C during the read stage — the
+// longest one in the run — would otherwise be told to reinstall onnxruntime. The
+// checks run BEFORE each stage's own error is inspected, so the cancellation
+// wins over the misdiagnosis it caused.
+//
 // Two orderings in here are decisions rather than consequences:
 //
 // ZERO MATCHES FAIL AFTER THE REPORTS ARE WRITTEN. A run that could not place a
@@ -147,6 +160,17 @@ func Run(ctx context.Context, o Options, d Deps) (Summary, error) {
 		return summary, errors.New("offline: Run needs the OCR model's Charset; the zero value scores nothing and would report every page as unreadable")
 	}
 
+	// StopAfter is the one Option whose bad value is not self-correcting: an
+	// unrecognized stage name passes both gates below and lands in the
+	// transcription stage, where a programmatic caller that never went through
+	// ParseArgs has no provider built and the run panics on a nil one. The check
+	// is the same one ParseArgs makes, and the message is the same too.
+	switch o.StopAfter {
+	case "", StopAfterMatch, StopAfterMask:
+	default:
+		return summary, newUsageError(nil, "--stop-after must be %q or %q (or omitted to run everything), got %q", StopAfterMatch, StopAfterMask, o.StopAfter)
+	}
+
 	// 1. The warning comes first and unconditionally, before any work: it exists
 	// to be read BEFORE the operator trusts the output, not after.
 	PrintBanner(stderr, o.Out)
@@ -185,6 +209,11 @@ func Run(ctx context.Context, o Options, d Deps) (Summary, error) {
 	// 4. Render.
 	started = time.Now()
 	pages, err := RenderPages(ctx, d.Renderer, o.Scans, filepath.Join(o.Out, pagesDirName), o.DPI, o.LongEdge, o.JPEGQuality)
+	if cerr := ctx.Err(); cerr != nil {
+		// Before err, so a cancelled render is reported as a cancellation rather
+		// than as the *ScanError the renderer raised on its way out.
+		return summary, cancelledDuring("render", o.Out, cerr)
+	}
 	if err != nil {
 		return summary, err
 	}
@@ -199,6 +228,13 @@ func Run(ctx context.Context, o Options, d Deps) (Summary, error) {
 	reads := make([]PageRead, 0, len(pages))
 	for _, page := range pages {
 		id, err := ReadIdentity(ctx, d.OCR, page, regions, cropsDir)
+		if cerr := ctx.Err(); cerr != nil {
+			// Before err, and per page rather than once around the loop: this is
+			// the longest stage in the run, so it is where a Ctrl-C actually
+			// lands, and the *OCRError the engine returns on the way out would
+			// send the operator to reinstall onnxruntime.
+			return summary, cancelledDuring("the identity read", o.Out, cerr)
+		}
 		if err != nil {
 			return summary, err
 		}
@@ -321,7 +357,7 @@ func Run(ctx context.Context, o Options, d Deps) (Summary, error) {
 	// failed" rows is indistinguishable from a run against a dead endpoint, and
 	// everything written so far stays on disk to be re-used or inspected.
 	if cerr := ctx.Err(); cerr != nil {
-		return summary, fmt.Errorf("offline: the run was cancelled during transcription; the artifacts written so far are in %s: %w", o.Out, cerr)
+		return summary, cancelledDuring("transcription", o.Out, cerr)
 	}
 	if transcribeErr != nil {
 		return summary, transcribeErr
@@ -338,6 +374,19 @@ func Run(ctx context.Context, o Options, d Deps) (Summary, error) {
 
 	printSummary(stdout, summary)
 	return summary, nil
+}
+
+// cancelledDuring is how every stage reports a cancellation: the stage it
+// happened in, where the half-finished artifacts are, and the cause wrapped so
+// errors.Is(err, context.Canceled) holds.
+//
+// It is deliberately NOT one of the typed errors. A cancellation is not a bad
+// roster, an unreadable scan or a missing ONNX runtime, and borrowing one of
+// those codes would tell a script — and an operator — to go fix something that
+// was never broken. ExitCode sees no typed error in the chain and returns the
+// honest unclassified 1.
+func cancelledDuring(stage, outDir string, cause error) error {
+	return fmt.Errorf("offline: the run was cancelled during %s; the artifacts written so far are in %s: %w", stage, outDir, cause)
 }
 
 // writerOr defaults a nil stream to io.Discard, so a caller that only wants the

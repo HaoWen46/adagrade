@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/HaoWen46/adagrade/internal/localocr"
 	"github.com/HaoWen46/adagrade/internal/offline"
@@ -71,7 +73,18 @@ func offlineGrade(args []string, stdout, stderr io.Writer) int {
 	}
 	defer func() { _ = renderer.Close() }()
 
-	_, err = offline.Run(context.Background(), opts, offline.Deps{
+	// Ctrl-C has to reach Run, not just the process. Run's whole cancellation
+	// contract — stop issuing provider calls (and therefore stop SPENDING) the
+	// moment the operator changes their mind, report the stop as a cancellation
+	// instead of as a dead endpoint or a broken ONNX install, and leave the
+	// artifacts written so far on disk — is unreachable from a bare
+	// context.Background(). This mirrors the server's own signal handling in
+	// main.go's run(). A SECOND signal still kills the process outright, which is
+	// the escape hatch if a provider call hangs past the first.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	_, err = offline.Run(ctx, opts, offline.Deps{
 		Renderer: renderer,
 		OCR:      engine,
 		// The dictionary MUST come from the engine that produced the lattices;
