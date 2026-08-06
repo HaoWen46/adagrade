@@ -335,6 +335,24 @@ func TestCharset_ClassMapping(t *testing.T) {
 	}
 }
 
+// TestCharset_AmbiguousDictionaryEntries pins which class wins when the same
+// rune is reachable twice: a duplicated dictionary entry keeps the lower class,
+// and a dictionary that already carries ' ' beats the appended trailing-space
+// class (some PP-OCR dictionaries ship a space glyph).
+func TestCharset_AmbiguousDictionaryEntries(t *testing.T) {
+	dup := newCharset([]rune{'a', 'b', 'a'}, false)
+	if got, ok := dup.Class('a'); !ok || got != 1 {
+		t.Errorf("duplicate entry: Class('a') = (%d,%v), want (1,true)", got, ok)
+	}
+	sp := newCharset([]rune{'a', ' ', 'c'}, true)
+	if got, ok := sp.Class(' '); !ok || got != 2 {
+		t.Errorf("dictionary space must win over the trailing class: Class(' ') = (%d,%v), want (2,true)", got, ok)
+	}
+	if got := sp.NumClasses(); got != 5 {
+		t.Errorf("NumClasses still counts the trailing class: got %d, want 5", got)
+	}
+}
+
 func TestEngineCharset_MirrorsDictionary(t *testing.T) {
 	e := &Engine{keys: []rune{'a', 'b', 'c'}, trailingSpace: true}
 	cs := e.Charset()
