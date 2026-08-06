@@ -262,6 +262,29 @@ func TestMaskPages_UndecodablePageIsFatal(t *testing.T) {
 	}
 }
 
+// TestMaskPages_EmptyRegionSetIsRefused — imaging.Mask accepts an empty region
+// slice and returns a re-encoded copy: a valid MaskedImage wrapping the
+// UNTOUCHED original. That is the single input that would let this stage
+// certify an unmasked page as safe to send, so it must fail before anything is
+// written.
+func TestMaskPages_EmptyRegionSetIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	maskedDir := filepath.Join(dir, "masked")
+	pages := maskFixturePages(t, 2, bandPageJPEG, 200, 100)
+
+	masked, err := MaskPages(pages, RegionSet{}, 85, maskedDir)
+	assertErrorType[*RegionsError](t, err, "nothing to mask", "--id-band")
+	if code := ExitCode(err); code != ExitRegions {
+		t.Errorf("ExitCode = %d, want %d", code, ExitRegions)
+	}
+	if masked != nil {
+		t.Errorf("masked = %v, want nil", masked)
+	}
+	if _, err := os.Stat(maskedDir); !os.IsNotExist(err) {
+		t.Errorf("stat %s: err = %v, want not-exist — nothing may be written", maskedDir, err)
+	}
+}
+
 // TestMaskPages_UnusableDirectoryIsAnOutDirError keeps the "which flag do I
 // fix" mapping honest: a bad --out is exit 5, not a masking failure.
 func TestMaskPages_UnusableDirectoryIsAnOutDirError(t *testing.T) {
@@ -277,11 +300,54 @@ func TestMaskPages_UnusableDirectoryIsAnOutDirError(t *testing.T) {
 // expectations below read as arithmetic rather than magic numbers:
 //
 //	union rect: x 0..800 (full width, padding clamped), y 0..ceil((0.18+0.004)*400)=74
-//	tile:       420 wide, round(74*420/800) = 39 tall
+//	context:    x ±round(0.05*800)=40 (clamped to 0..800), y ±round(0.5*74)=37 (clamped to 0..111)
+//	crop:       800 x 111
+//	tile:       420 wide, round(111*420/800) = 58 tall
 const (
 	bandTileW = 420
-	bandTileH = 39
+	bandTileH = 58
 )
+
+// TestMaskContextRect_GrowsTheUnionAndClampsAtTheEdges — the growth is what
+// makes a tile answer "did anything identifying land OUTSIDE the gray"; without
+// it a band-mode tile is 100% mask fill and answers nothing.
+func TestMaskContextRect_GrowsTheUnionAndClampsAtTheEdges(t *testing.T) {
+	page := image.Rect(0, 0, 800, 400)
+	tests := []struct {
+		name  string
+		union image.Rectangle
+		want  image.Rectangle
+	}{
+		{
+			// Interior: room to grow on every side. x ±40 (5% of the page's
+			// width), y ±14 (half the union's 28px height).
+			name:  "interior region grows on all four sides",
+			union: image.Rect(476, 198, 724, 226),
+			want:  image.Rect(436, 184, 764, 240),
+		},
+		{
+			// Top-of-page identity box: the upward growth stops at the paper
+			// edge instead of running off it.
+			name:  "top edge clamps upward growth",
+			union: image.Rect(76, 6, 724, 34),
+			want:  image.Rect(36, 0, 764, 48),
+		},
+		{
+			// Full-width band: horizontal growth clamps on both sides, so the
+			// tile is the page width and the aspect stays sane.
+			name:  "full-width band clamps horizontally",
+			union: image.Rect(0, 0, 800, 74),
+			want:  image.Rect(0, 0, 800, 111),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := maskContextRect(page, tc.union); got != tc.want {
+				t.Errorf("maskContextRect = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
 
 func sheetSize(t *testing.T, path string) (int, int) {
 	t.Helper()
@@ -337,8 +403,10 @@ func TestWriteContactSheet_TilesSixAcross(t *testing.T) {
 // unreadably tall sheet.
 func TestWriteContactSheet_OverflowsPastSixtyTiles(t *testing.T) {
 	// Small pages: 61 of them, and the geometry is the same arithmetic.
-	// union y 0..ceil(0.184*100)=19, x 0..200 => tile 420 x round(19*420/200)=40
-	const tileH = 40
+	// union y 0..ceil(0.184*100)=19, x 0..200; context ±round(0.5*19)=10 and
+	// ±round(0.05*200)=10, both clamped => crop 200x29
+	// => tile 420 x round(29*420/200)=61
+	const tileH = 61
 	masked := maskedFixture(t, 61, bandPageJPEG, 200, 100, BandRegions(0.18))
 	dir := t.TempDir()
 	out := filepath.Join(dir, "masked-preview.jpg")
@@ -374,26 +442,51 @@ func TestWriteContactSheet_CropsTheMaskUnionOnly(t *testing.T) {
 	if _, err := WriteContactSheet(masked, regions, out); err != nil {
 		t.Fatalf("WriteContactSheet: %v", err)
 	}
-	// union: x floor((0.1-0.004)*800)=76 .. ceil((0.9+0.004)*800)=724  => 648
-	//        y floor((0.02-0.004)*400)=6 .. ceil((0.08+0.004)*400)=34  => 28
-	// tile:  420 wide, round(28*420/648) = 18 tall
+	// union:   x floor((0.1-0.004)*800)=76 .. ceil((0.9+0.004)*800)=724  => 648
+	//          y floor((0.02-0.004)*400)=6 .. ceil((0.08+0.004)*400)=34  => 28
+	// context: x ±40 => 36..764 (728); y ±14 => -8..48, clamped to 0..48 (48)
+	// tile:    420 wide, round(48*420/728) = 28 tall
 	w, h := sheetSize(t, out)
-	if w != 420 || h != 18 {
-		t.Fatalf("sheet = %dx%d, want 420x18 (the mask-region union, not the whole page)", w, h)
+	if w != 420 || h != 28 {
+		t.Fatalf("sheet = %dx%d, want 420x28 (the mask union plus context, not the whole page)", w, h)
 	}
 
-	// And what it shows is MASKED: the student_id box maps to roughly x 262..417
-	// of the tile, which must read as fill rather than as the box's own ink.
+	// And what it shows is MASKED: the student_id box maps to roughly x 254..397,
+	// y 0..16 of the tile, which must read as fill rather than as the box's ink.
 	data, err := os.ReadFile(out)
 	if err != nil {
 		t.Fatalf("read sheet: %v", err)
 	}
 	img := decodeJPEG(t, data)
-	got := pixel(img, 340, 9)
+	got := pixel(img, 325, 11)
 	if dist(got, maskFill) >= dist(got, studentInk) {
-		t.Errorf("contact-sheet pixel (340,9) = %v, closer to the student_id ink %v than to the mask fill %v — the preview is showing unmasked pixels",
+		t.Errorf("contact-sheet pixel (325,11) = %v, closer to the student_id ink %v than to the mask fill %v — the preview is showing unmasked pixels",
 			got, studentInk, maskFill)
 	}
+}
+
+// TestWriteContactSheet_TileShowsTheMaskAndItsSurroundings is the reason the
+// crop is grown at all. In band mode the mask covers the whole top strip, so a
+// tile cropped to the union alone would be a solid gray rectangle on every
+// page: an operator could not tell a well-placed mask from one whose band was
+// too short and left a name showing just below it. The tile must carry both.
+func TestWriteContactSheet_TileShowsTheMaskAndItsSurroundings(t *testing.T) {
+	masked := maskedFixture(t, 1, bandPageJPEG, 800, 400, BandRegions(0.18))
+	out := filepath.Join(t.TempDir(), "masked-preview.jpg")
+	if _, err := WriteContactSheet(masked, BandRegions(0.18), out); err != nil {
+		t.Fatalf("WriteContactSheet: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read sheet: %v", err)
+	}
+	img := decodeJPEG(t, data)
+
+	// Scale is 420/800 = 0.525, so the masked band (source y 0..74) occupies
+	// tile y 0..38 and the page below it occupies y 39..58.
+	assertPixelIs(t, img, 210, 15, maskFill, "the masked band inside the tile")
+	assertPixelIs(t, img, 210, 52, color.RGBA{R: 255, G: 255, B: 255, A: 255},
+		"the page BELOW the mask — the context that makes an escaped name visible")
 }
 
 // TestWriteContactSheet_WritesPrivateFiles — same PII rule as every other

@@ -134,7 +134,7 @@ func manifestRowFor(t *testing.T, root, rel, studentID string) []string {
 // second root of our own would produce out/bundle/offline-exam-p1/offline-exam-p1/…
 func TestWriteBundle_WritesTheExportLayoutUnderOneRootPerProblem(t *testing.T) {
 	dir := t.TempDir()
-	if err := WriteBundle(dir, "Offline Exam", bundleFixture(t), bundleRoster(), 2); err != nil {
+	if err := WriteBundle(dir, "Offline Exam", bundleFixture(t), bundleRoster(), 2, ""); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 	want := []string{
@@ -172,7 +172,7 @@ func TestWriteBundle_MultiPageAnswerGetsNumberedImages(t *testing.T) {
 		bundleCell(t, 5, rows[0], 1),
 		bundleCell(t, 2, rows[0], 1), // same student and problem, earlier page
 	}
-	if err := WriteBundle(dir, "Offline Exam", cells, rows, 1); err != nil {
+	if err := WriteBundle(dir, "Offline Exam", cells, rows, 1, ""); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 	want := []string{"offline-exam-p1/images/AB01-p1.jpg", "offline-exam-p1/images/AB01-p2.jpg"}
@@ -205,7 +205,7 @@ func TestWriteBundle_MultiPageAnswerGetsNumberedImages(t *testing.T) {
 func TestWriteBundle_ImagesAreTheOriginalPagesNotTheMasked(t *testing.T) {
 	dir := t.TempDir()
 	cells := bundleFixture(t)
-	if err := WriteBundle(dir, "Offline Exam", cells, bundleRoster(), 2); err != nil {
+	if err := WriteBundle(dir, "Offline Exam", cells, bundleRoster(), 2, ""); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 	for _, tc := range []struct {
@@ -244,7 +244,7 @@ func TestWriteBundle_NoFileButTheManifestCarriesAnIdentity(t *testing.T) {
 		Kind: transcribe.BlockProse,
 		Text: "Test Alpha (AB01, alpha@example.test) — continued on the back.",
 	})
-	if err := WriteBundle(dir, "Offline Exam", cells, rows, 2); err != nil {
+	if err := WriteBundle(dir, "Offline Exam", cells, rows, 2, ""); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 
@@ -297,7 +297,7 @@ func TestWriteBundle_ScrubIsAppliedExactlyOnce(t *testing.T) {
 		Kind: transcribe.BlockProse,
 		Text: "Test Alpha AB01 wrote this in the margin",
 	})}
-	if err := WriteBundle(dir, "Offline Exam", cells, rows, 1); err != nil {
+	if err := WriteBundle(dir, "Offline Exam", cells, rows, 1, ""); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 	flags := manifestRowFor(t, dir, "offline-exam-p1/MANIFEST.csv", "AB01")[6]
@@ -310,7 +310,7 @@ func TestWriteBundle_ScrubIsAppliedExactlyOnce(t *testing.T) {
 // handwriting and transcriptions on a shared machine.
 func TestWriteBundle_PrivateModes(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "bundle")
-	if err := WriteBundle(dir, "Offline Exam", bundleFixture(t), bundleRoster(), 2); err != nil {
+	if err := WriteBundle(dir, "Offline Exam", bundleFixture(t), bundleRoster(), 2, ""); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
@@ -335,12 +335,108 @@ func TestWriteBundle_PrivateModes(t *testing.T) {
 	}
 }
 
+// --- failed cells ----------------------------------------------------------
+
+var errWriteBundleFixture = errors.New("upstream refused")
+
+// TestWriteBundle_FailedCellIsAFailedRowWithItsPages — the professor must see
+// the student, with the real pages, and grade them by hand. Dropping the row
+// would make "the transcription failed" indistinguishable from "this student
+// never sat the exam", which is the exact ambiguity export's four statuses
+// exist to remove.
+func TestWriteBundle_FailedCellIsAFailedRowWithItsPages(t *testing.T) {
+	dir := t.TempDir()
+	rows := bundleRoster()
+	cells := []CellDoc{bundleCell(t, 1, rows[0], 1), bundleCell(t, 2, rows[1], 1)}
+	cells[0].Err = errWriteBundleFixture
+	cells[0].Doc = transcribe.Doc{}
+	cells[0].Confidence = ""
+
+	if err := WriteBundle(dir, "Offline Exam", cells, rows, 1, ""); err != nil {
+		t.Fatalf("WriteBundle: %v", err)
+	}
+	row := manifestRowFor(t, dir, "offline-exam-p1/MANIFEST.csv", "AB01")
+	if row[3] != "failed" {
+		t.Errorf("status = %q, want %q", row[3], "failed")
+	}
+	if !strings.Contains(row[6], "transcription failed") {
+		t.Errorf("flags = %q, want the %q note the web export writes", row[6], "transcription failed")
+	}
+	if row[2] != "1" {
+		t.Errorf("pages = %q, want 1 — the failed answer keeps its page", row[2])
+	}
+	// The page is in the bundle, and it is the ORIGINAL: a failed row exists
+	// precisely so someone can read the paper.
+	got := readBundleFile(t, dir, "offline-exam-p1/images/AB01.jpg")
+	if !bytes.Equal(got, cells[0].Result.Page.JPEG) {
+		t.Error("images/AB01.jpg is not the failed cell's original page")
+	}
+	// The student who did transcribe is unaffected.
+	if ok := manifestRowFor(t, dir, "offline-exam-p1/MANIFEST.csv", "AB02"); ok[3] != "ok" {
+		t.Errorf("the successful answer's status = %q, want %q", ok[3], "ok")
+	}
+}
+
+// TestWriteBundle_EveryCellFailedStillWritesTheRows — the run has already
+// failed with a *ProviderError upstream, but the bundle is the record of WHICH
+// students were affected, and their pages are the fallback for grading them.
+func TestWriteBundle_EveryCellFailedStillWritesTheRows(t *testing.T) {
+	dir := t.TempDir()
+	rows := bundleRoster()
+	cells := []CellDoc{bundleCell(t, 1, rows[0], 1)}
+	cells[0].Err = errWriteBundleFixture
+	cells[0].Doc = transcribe.Doc{}
+
+	if err := WriteBundle(dir, "Offline Exam", cells, rows, 2, ""); err != nil {
+		t.Fatalf("WriteBundle: %v", err)
+	}
+	if row := manifestRowFor(t, dir, "offline-exam-p1/MANIFEST.csv", "AB01"); row[3] != "failed" {
+		t.Errorf("status = %q, want %q", row[3], "failed")
+	}
+	// Problem 2 had no cells at all, so it still gets nothing.
+	for _, rel := range walkBundle(t, dir) {
+		if strings.HasPrefix(rel, "offline-exam-p2/") {
+			t.Errorf("wrote %s for a problem with no cells at all", rel)
+		}
+	}
+}
+
+// TestWriteBundle_FailedCellWithNoMaskedImageStillGetsARow — the cell that was
+// refused BEFORE the call (no masked image) has no page export would accept.
+// The row must still appear, with zero pages, rather than taking the whole
+// bundle down on export's "page has no masked bytes" validation.
+func TestWriteBundle_FailedCellWithNoMaskedImageStillGetsARow(t *testing.T) {
+	dir := t.TempDir()
+	rows := bundleRoster()
+	cells := []CellDoc{bundleCell(t, 1, rows[0], 1)}
+	cells[0].Err = errWriteBundleFixture
+	cells[0].Doc = transcribe.Doc{}
+	cells[0].Masked = imaging.MaskedImage{}
+
+	if err := WriteBundle(dir, "Offline Exam", cells, rows, 1, ""); err != nil {
+		t.Fatalf("WriteBundle: %v", err)
+	}
+	row := manifestRowFor(t, dir, "offline-exam-p1/MANIFEST.csv", "AB01")
+	if row[3] != "failed" {
+		t.Errorf("status = %q, want %q", row[3], "failed")
+	}
+	if row[2] != "0" {
+		t.Errorf("pages = %q, want 0", row[2])
+	}
+	for _, rel := range walkBundle(t, dir) {
+		if strings.Contains(rel, "/images/") {
+			t.Errorf("wrote %s for a cell that has no page", rel)
+		}
+	}
+}
+
 // --- what is left out ------------------------------------------------------
 
-// TestWriteBundle_SkipsProblemsWithNothingToShow — an empty problem directory
-// reads as "nobody answered", which is a claim about the cohort this run has no
-// business making.
-func TestWriteBundle_SkipsProblemsWithNothingToShow(t *testing.T) {
+// TestWriteBundle_SkipsOnlyProblemsWithNoCellsAtAll — an empty problem
+// directory reads as "nobody answered", which is a claim about the cohort this
+// run has no business making. A problem whose cells all FAILED is not empty: it
+// has students, pages, and a reason.
+func TestWriteBundle_SkipsOnlyProblemsWithNoCellsAtAll(t *testing.T) {
 	dir := t.TempDir()
 	rows := bundleRoster()
 	cells := []CellDoc{
@@ -351,37 +447,20 @@ func TestWriteBundle_SkipsProblemsWithNothingToShow(t *testing.T) {
 	cells[1].Doc = transcribe.Doc{}
 
 	// --problems 3: problem 2 has only a failed cell, problem 3 has none at all.
-	if err := WriteBundle(dir, "Offline Exam", cells, rows, 3); err != nil {
+	if err := WriteBundle(dir, "Offline Exam", cells, rows, 3, ""); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 	for _, rel := range walkBundle(t, dir) {
-		if strings.HasPrefix(rel, "offline-exam-p2/") || strings.HasPrefix(rel, "offline-exam-p3/") {
-			t.Errorf("wrote %s for a problem with no successful cells", rel)
+		if strings.HasPrefix(rel, "offline-exam-p3/") {
+			t.Errorf("wrote %s for a problem with no cells at all", rel)
 		}
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read out dir: %v", err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "offline-exam-p1" {
-		t.Errorf("out dir holds %v, want only offline-exam-p1", entries)
-	}
-}
-
-var errWriteBundleFixture = errors.New("transcription failed")
-
-// TestWriteBundle_NothingSucceededWritesNoBundle — the run already failed with
-// a *ProviderError upstream; the bundle must not fabricate an empty one.
-func TestWriteBundle_NothingSucceededWritesNoBundle(t *testing.T) {
-	dir := t.TempDir()
-	rows := bundleRoster()
-	cells := []CellDoc{bundleCell(t, 1, rows[0], 1)}
-	cells[0].Err = errWriteBundleFixture
-	if err := WriteBundle(dir, "Offline Exam", cells, rows, 2); err != nil {
-		t.Fatalf("WriteBundle: %v", err)
-	}
-	if files := walkBundle(t, dir); len(files) != 0 {
-		t.Errorf("wrote %v, want nothing", files)
+	if len(entries) != 2 || entries[0].Name() != "offline-exam-p1" || entries[1].Name() != "offline-exam-p2" {
+		t.Errorf("out dir holds %v, want offline-exam-p1 and -p2 (p3 has no cells)", entries)
 	}
 }
 
@@ -397,7 +476,7 @@ func TestWriteBundle_UnmatchedCellsNeverReachTheBundle(t *testing.T) {
 	cells[1].Result.StudentName = ""
 	cells[1].Result.Problem = 0
 
-	if err := WriteBundle(dir, "Offline Exam", cells, rows, 1); err != nil {
+	if err := WriteBundle(dir, "Offline Exam", cells, rows, 1, ""); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 	for _, rel := range walkBundle(t, dir) {
@@ -416,7 +495,7 @@ func TestWriteBundle_IllegibleAnswerIsRecordedAsSuch(t *testing.T) {
 	cells[0].Doc = transcribe.Doc{}
 	cells[0].Confidence = "illegible"
 
-	if err := WriteBundle(dir, "Offline Exam", cells, rows, 1); err != nil {
+	if err := WriteBundle(dir, "Offline Exam", cells, rows, 1, ""); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 	row := manifestRowFor(t, dir, "offline-exam-p1/MANIFEST.csv", "AB01")
@@ -431,6 +510,54 @@ func TestWriteBundle_IllegibleAnswerIsRecordedAsSuch(t *testing.T) {
 	}
 }
 
+// --- CJK font --------------------------------------------------------------
+
+// TestWriteBundle_CJKFontPathLandsInThePreamble — the bundle is Traditional
+// Chinese by default, and xeCJK silently DROPS every Chinese glyph when the
+// font cannot be resolved. Loading it by path is what makes the .tex compile on
+// a machine with no fonts installed, which is the whole point of shipping one.
+func TestWriteBundle_CJKFontPathLandsInThePreamble(t *testing.T) {
+	fontDir := filepath.Join(t.TempDir(), "fonts")
+	font := filepath.Join(fontDir, "NotoSansTC-Regular.ttf")
+
+	dir := t.TempDir()
+	if err := WriteBundle(dir, "Offline Exam", bundleFixture(t), bundleRoster(), 1, font); err != nil {
+		t.Fatalf("WriteBundle: %v", err)
+	}
+	// Both the per-student document and the aggregate share one preamble, so
+	// both must carry the font — a bundle that compiles one way and not the
+	// other is worse than one that fails outright.
+	for _, rel := range []string{"offline-exam-p1/tex/AB01.tex", "offline-exam-p1/_all.tex"} {
+		tex := string(readBundleFile(t, dir, rel))
+		if !strings.Contains(tex, `\setCJKmainfont[Path=`) {
+			t.Errorf("%s: preamble does not load the CJK font by path", rel)
+		}
+		if !strings.Contains(tex, fontDir) {
+			t.Errorf("%s: preamble does not carry the font's directory", rel)
+		}
+		if !strings.Contains(tex, "NotoSansTC-Regular") || !strings.Contains(tex, "Extension=.ttf") {
+			t.Errorf("%s: preamble does not name the font file and its extension", rel)
+		}
+	}
+}
+
+// TestWriteBundle_NoCJKFontFallsBackToTheFamilyName — documented behavior, not
+// an accident: without a path the professor's machine must have the family
+// installed.
+func TestWriteBundle_NoCJKFontFallsBackToTheFamilyName(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteBundle(dir, "Offline Exam", bundleFixture(t), bundleRoster(), 1, ""); err != nil {
+		t.Fatalf("WriteBundle: %v", err)
+	}
+	tex := string(readBundleFile(t, dir, "offline-exam-p1/tex/AB01.tex"))
+	if !strings.Contains(tex, `\setCJKmainfont{Noto Sans TC}`) {
+		t.Error("preamble does not fall back to the CJK font FAMILY name")
+	}
+	if strings.Contains(tex, "Path=") {
+		t.Error("preamble loads a font by path when none was configured")
+	}
+}
+
 // TestWriteBundle_StudentMissingFromTheRosterIsAnError — the identity fields
 // feed export's redaction needles, so a row assembled without them would ship a
 // bundle whose scrub had nothing to look for.
@@ -438,7 +565,7 @@ func TestWriteBundle_StudentMissingFromTheRosterIsAnError(t *testing.T) {
 	dir := t.TempDir()
 	rows := bundleRoster()
 	cells := []CellDoc{bundleCell(t, 7, roster.Row{StudentID: "ZZ99", Name: "Test Gamma"}, 1)}
-	err := WriteBundle(dir, "Offline Exam", cells, rows, 1)
+	err := WriteBundle(dir, "Offline Exam", cells, rows, 1, "")
 	assertErrorType[*RosterError](t, err, "page 7")
 	if strings.Contains(err.Error(), "ZZ99") || strings.Contains(err.Error(), "Test Gamma") {
 		t.Errorf("error %q names a student (PII rule)", err.Error())

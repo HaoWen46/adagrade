@@ -80,11 +80,23 @@ type MaskedPage struct {
 // best-effort skip here on purpose: masking is the privacy gate, and a "skip"
 // would leave the orchestrator holding a page with no masked twin, one zip
 // field away from sending the original.
+//
+// A region set with nothing to mask is refused outright (*RegionsError, exit 7)
+// before anything is written. imaging.Mask accepts an empty region slice and
+// returns a re-encoded copy — a perfectly valid MaskedImage carrying the
+// untouched original. That is the one input that would let this stage CERTIFY
+// an unmasked page as safe to send, so it is a run failure rather than a
+// silently identity-preserving pass.
 func MaskPages(pages []Page, regions RegionSet, quality int, maskedDir string) ([]MaskedPage, error) {
+	maskRegions := regions.MaskRegions()
+	if len(maskRegions) == 0 {
+		return nil, newRegionsError(nil,
+			"the region set has nothing to mask: masking an empty region set would re-encode the identity straight through and label it masked; pass --id-regions with a %q or %q region, or drop it to use the --id-band top strip",
+			KindStudentID, KindName)
+	}
 	if err := mkdirPrivate(maskedDir); err != nil {
 		return nil, newOutDirError(err, "cannot create masked-page directory %s", maskedDir)
 	}
-	maskRegions := regions.MaskRegions()
 
 	out := make([]MaskedPage, 0, len(pages))
 	for _, page := range pages {
@@ -116,12 +128,18 @@ const (
 // WriteContactSheet writes the mask preview: every page's identity area,
 // AFTER masking, tiled into one image the operator can check at a glance.
 //
-// The crop is the union of the MASK regions (padded exactly as the mask itself
-// is), so a tile shows the covered rectangle plus the slack around it — which
-// is where an escaped name actually shows up. It deliberately crops the MASKED
-// image, not the original: a preview of the originals would be a single file
-// containing every student's identity, which is the one artifact this mode must
-// not create.
+// The crop is the mask-region union GROWN BY CONTEXT (see maskContextRect), and
+// the context is the entire point. A tile cropped to the union alone would, in
+// band mode, be 100% mask fill on every page — a grid of identical gray
+// rectangles that cannot answer the only question it is asked. The question is
+// "did anything identifying end up OUTSIDE the gray", so the tile has to show
+// the margin around the covered rectangle: a name written above the box, a
+// student number that overflowed to the right.
+//
+// It crops the MASKED image, not the original: a preview built from the
+// originals would be a single file containing every student's identity, which
+// is the one artifact this mode must not create. What an operator sees is
+// therefore exactly what the provider would see of that area.
 //
 // Sheets hold up to 60 tiles. The first is written to outPath and each overflow
 // sheet gets a -02, -03, … suffix before the extension. Every path written is
@@ -231,7 +249,7 @@ func identityTile(mp MaskedPage, maskRegions []imaging.Region) (image.Image, err
 	if err != nil {
 		return nil, newScanError(err, "cannot decode the masked image of page %d for the mask preview", mp.Page.Index)
 	}
-	crop := maskUnionRect(src.Bounds(), maskRegions)
+	crop := maskContextRect(src.Bounds(), maskUnionRect(src.Bounds(), maskRegions))
 	height := int(math.Round(float64(crop.Dy()) * contactTileWidth / float64(crop.Dx())))
 	if height < 1 {
 		height = 1
@@ -251,9 +269,11 @@ func identityTile(mp MaskedPage, maskRegions []imaging.Region) (image.Image, err
 // IDCrop's JPEG bytes, which is the wrong shape twice over for a union crop
 // that has to be scaled into a tile.
 //
-// With no mask regions at all — only reachable from a zero-value RegionSet,
-// since both BandRegions and LoadRegions guarantee one — the whole page is the
-// crop, which reads as "nothing was covered" rather than crashing.
+// With no mask regions at all the whole page is the crop. That case cannot
+// arrive through the pipeline — MaskPages refuses an empty mask-region set
+// outright, so nothing downstream of it can hold pages masked with none — and
+// the fallback exists only so a direct call degrades to "show everything"
+// instead of dividing by a zero-width crop.
 func maskUnionRect(bounds image.Rectangle, regions []imaging.Region) image.Rectangle {
 	wPx := float64(bounds.Dx())
 	hPx := float64(bounds.Dy())
@@ -277,4 +297,37 @@ func maskUnionRect(bounds image.Rectangle, regions []imaging.Region) image.Recta
 		return bounds
 	}
 	return union
+}
+
+// Context margins for a preview tile, as fractions of the union's height and of
+// the PAGE's width.
+//
+// Vertically the margin scales with the covered band, because that is the
+// direction identity escapes in: a name written just above the box, or a second
+// line that ran below it. Half the band's height above and below shows that
+// margin without swallowing the answer area.
+//
+// Horizontally it is a fraction of the PAGE rather than of the union, because
+// the union is often the full page width already (band mode) and 5% of a page is
+// a legible margin at any DPI, whereas 5% of a narrow ID box would be a few
+// pixels of nothing.
+const (
+	contactContextY = 0.5  // of the union's height, per side
+	contactContextX = 0.05 // of the page's width, per side
+)
+
+// maskContextRect grows the mask union by the context margins, clamped to the
+// page. Clamping is why a top-of-page band still produces a legible tile: the
+// growth simply stops at the paper edge instead of the crop running off it.
+func maskContextRect(bounds, union image.Rectangle) image.Rectangle {
+	growY := int(math.Round(float64(union.Dy()) * contactContextY))
+	growX := int(math.Round(float64(bounds.Dx()) * contactContextX))
+	grown := image.Rect(
+		union.Min.X-growX, union.Min.Y-growY,
+		union.Max.X+growX, union.Max.Y+growY,
+	).Intersect(bounds)
+	if grown.Empty() {
+		return union
+	}
+	return grown
 }
