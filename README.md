@@ -131,7 +131,10 @@ adamarker offline-grade \
 - **Stage the run.** `--stop-after match` does identification only — nothing is masked and
   nothing leaves the machine; read `match-report.csv`, then re-run with `--force`.
   `--stop-after mask` also writes the masked pages and `masked-preview.jpg`, so you can see
-  exactly what *would* be sent before spending a token. Neither needs a provider.
+  exactly what *would* be sent before spending a token. Neither needs a provider. Each stage
+  clears its own output before rewriting it, but a stage a run never reaches clears nothing:
+  after `--stop-after match` into an `--out` from a full run, `masked/` and `bundle/` are
+  still the *previous* run's — the report's empty `provider`/`model` fields are how you tell.
 - **Where identity lives.** `--id-regions FILE` (recommended) is the same
   `{"version":1,"regions":[{"kind":"student_id","x":…,"y":…,"w":…,"h":…}]}` geometry the
   app's mask-region editor produces; kinds are `student_id`, `name`, `problem_id`. Without

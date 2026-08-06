@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -441,18 +442,17 @@ const maskPreviewGlob = "masked-preview*.jpg"
 // outDir is touched. The four fixed files (run.log, the two match reports) are
 // overwritten wholesale by their own writers and need no clearing.
 //
-// A name containing '*' is treated as a glob within outDir; a failed match
-// pattern is a programming error and would be caught by any test that runs a
-// stage.
+// A name containing '*' is matched against the BASE NAMES of outDir's entries
+// (matchInDir), never joined into a glob path.
 func clearOwned(outDir string, names ...string) error {
 	for _, name := range names {
 		targets := []string{filepath.Join(outDir, name)}
 		if strings.ContainsRune(name, '*') {
-			matches, err := filepath.Glob(filepath.Join(outDir, name))
+			matched, err := matchInDir(outDir, name)
 			if err != nil {
-				return newOutDirError(err, "cannot list %s in the output directory %s", name, outDir)
+				return err
 			}
-			targets = matches
+			targets = matched
 		}
 		for _, target := range targets {
 			if err := os.RemoveAll(target); err != nil {
@@ -461,6 +461,34 @@ func clearOwned(outDir string, names ...string) error {
 		}
 	}
 	return nil
+}
+
+// matchInDir returns the paths of outDir's entries whose BASE NAME matches
+// pattern.
+//
+// It lists the directory and matches names rather than calling filepath.Glob on
+// filepath.Join(outDir, pattern), because outDir is operator input and a joined
+// pattern would let ITS metacharacters expand. An --out spelled `runs/run*[1]`
+// is a perfectly legal directory name on POSIX; joined into a glob it stops
+// naming that directory and starts naming every sibling matching `run*[1]` —
+// so the run would delete another directory's preview sheets and leave its own.
+// Reading one directory and matching base names cannot leave outDir at all.
+func matchInDir(outDir, pattern string) ([]string, error) {
+	entries, err := os.ReadDir(outDir)
+	if err != nil {
+		return nil, newOutDirError(err, "cannot read the output directory %s", outDir)
+	}
+	var out []string
+	for _, entry := range entries {
+		ok, err := path.Match(pattern, entry.Name())
+		if err != nil {
+			return nil, newOutDirError(err, "cannot match %q in the output directory %s", pattern, outDir)
+		}
+		if ok {
+			out = append(out, filepath.Join(outDir, entry.Name()))
+		}
+	}
+	return out, nil
 }
 
 // writerOr defaults a nil stream to io.Discard, so a caller that only wants the

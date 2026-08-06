@@ -889,3 +889,43 @@ func TestRun_MatchJSONRecordsTheRunsSettings(t *testing.T) {
 		}
 	})
 }
+
+// TestRun_ClearingIgnoresGlobMetacharactersInTheOutPath — --out is operator
+// input, and `runs/run*[1]` is a legal directory name on POSIX. Joining it into
+// a glob pattern would stop it naming that directory and start it naming every
+// SIBLING matching `run*[1]`: the run would then delete another directory's
+// preview sheets and leave its own. Matching base names inside the one directory
+// it read cannot leave --out at all.
+func TestRun_ClearingIgnoresGlobMetacharactersInTheOutPath(t *testing.T) {
+	f := newRunFixture(t, 3, 3, 1)
+	parent := filepath.Dir(f.out)
+
+	// The literal directory name carries the metacharacters. It does NOT match
+	// its own spelling as a pattern ("[1]" matches the character '1', not the
+	// three characters "[1]"), which is exactly how the joined-glob bug both
+	// spared the stale file here and deleted the innocent one next door.
+	f.out = filepath.Join(parent, "run*[1]")
+	f.opts.Out = f.out
+	if err := os.MkdirAll(f.out, 0o700); err != nil {
+		t.Skipf("this filesystem will not hold a directory named %q: %v", "run*[1]", err)
+	}
+	f.opts.Force = true
+	f.opts.StopAfter = StopAfterMask
+
+	// A sibling the pattern WOULD match if it were ever expanded against parent.
+	bystander := filepath.Join(parent, "run-other1")
+	if err := os.MkdirAll(bystander, 0o700); err != nil {
+		t.Fatalf("mkdir bystander: %v", err)
+	}
+	bystanderSheet := writeFile(t, bystander, maskPreviewName, "another run's preview")
+	// ...and a stale sheet of our own, which must go.
+	stale := writeFile(t, f.out, "masked-preview-02.jpg", "a previous run")
+
+	if _, err := Run(context.Background(), f.opts, f.deps); err != nil {
+		t.Fatalf("Run: %v\nstderr:\n%s", err, f.stderr.String())
+	}
+
+	requireFile(t, bystanderSheet)
+	requireAbsent(t, stale)
+	requireFile(t, f.path(maskPreviewName))
+}
