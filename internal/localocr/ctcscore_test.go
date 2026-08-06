@@ -527,10 +527,17 @@ func TestCTCScore_UnscorableTargets(t *testing.T) {
 }
 
 // TestCTCScore_NormalizationAcrossLengths is why ScoreResult carries Norm and
-// Prob at all: the matcher compares candidates of different lengths (a 2-glyph
-// name against a 3-glyph one), and raw LogLik is systematically more negative
-// for longer targets. Dividing by rune count turns it into a per-character
-// quality that is comparable across lengths.
+// Prob at all: a longer target accumulates more log-probability than a short
+// one at the same per-character quality, so raw LogLik cannot be compared
+// across lines of different lengths — which is exactly what a fixed "is this
+// match good enough" threshold has to do. Dividing by rune count turns it into
+// a per-character quality that means the same thing on a 1-frame line and a
+// 3-frame one, as the cases below show at a constant 0.80 per character.
+//
+// Note this is about comparing scores from DIFFERENT lattices. Candidates
+// scored against ONE line all sum over the same T frames, so there is no
+// mechanical length bias to remove there; see ScoreTarget's doc comment for
+// which of LogLik and Prob to rank on.
 func TestCTCScore_NormalizationAcrossLengths(t *testing.T) {
 	cs := scoreCharset()
 
@@ -600,7 +607,10 @@ func TestCTCScore_TopKLatticeMatchesDense(t *testing.T) {
 	cs := scoreCharset()
 	rows := probRows(abProbs)
 
-	dense, _ := ScoreTarget(NewLattice(rows, 0), cs, "ab", ScoreOptions{})
+	dense, ok := ScoreTarget(NewLattice(rows, 0), cs, "ab", ScoreOptions{})
+	if !ok {
+		t.Fatalf("ScoreTarget(ab) on dense: ok=false, want true")
+	}
 	// K=3 of 4 classes drops only 'c' on every frame (ties break to the lower
 	// class, so 'a' survives frames 2 and 3), and "ab" never asks about 'c'.
 	keepAll, ok := ScoreTarget(NewLattice(rows, 3), cs, "ab", ScoreOptions{})

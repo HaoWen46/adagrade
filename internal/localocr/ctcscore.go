@@ -43,7 +43,7 @@ type ScoreResult struct {
 	LogLik  float64 // total forward log-likelihood over all alignments (log space)
 	RuneLen int     // rune length of the target as scored
 	Norm    float64 // LogLik / max(1, RuneLen) — per-character normalization
-	Prob    float64 // exp(Norm) — geometric-mean per-character probability
+	Prob    float64 // exp(Norm) — geometric-mean per-character probability (may exceed 1 under AllowSurroundingText — see ScoreTarget)
 }
 
 // ScoreTarget scores target against the lattice, summing over every alignment
@@ -82,8 +82,32 @@ type ScoreResult struct {
 // wildcard stands for "any class", so two wildcard alignments can cover the
 // same class sequence and their probabilities double-count. A plain match has
 // no such overlap — its alignments are disjoint events, so its Prob is in
-// (0,1]. Nothing is clamped: a clamp would hide a broken forward pass, and
-// ranking needs the ordering, not the range.
+// (0,1] whenever LogLik is finite, and exactly 0 for an impossible target.
+// Nothing is clamped: a clamp would hide a broken forward pass, and ranking
+// needs the ordering, not the range.
+//
+// One more positional caveat for AllowSurroundingText. Reaching the target
+// from a wildcard costs one frame's blank log-prob (see canSkip), but ONLY at
+// a boundary that is interior to the line: the first character is a legal
+// start state at frame 0 and the last is a legal end state at frame T-1, so a
+// candidate whose span abuts the start or the end of the line enters or leaves
+// through that edge for free. There is no text out there for a blank to
+// separate the target from, so charging for one would penalize a candidate for
+// sitting at the edge — but it does mean the flank cost is a function of WHERE
+// a candidate aligns, not only of how well it matches. Candidates spanning the
+// whole line pay nothing, edge-touching candidates pay one interior boundary,
+// strictly interior candidates pay two. Prefix and suffix matches are exactly
+// symmetric.
+//
+// That positional term is negligible on a normal line, where the boundary
+// falls on one of the blank-dominated frames a CTC head puts between fields.
+// It bites when two fields ABUT with no blank frame, because then the boundary
+// lands on a character spike: on a synthetic three-frame line of abutting
+// spikes (each .90, blank .04), the edge-touching candidate "a" scores 4.07e-2
+// against the interior candidate "b" at 6.91e-3 — a 5.9x gap between two
+// equally good single-character matches, earned entirely by position. Where
+// roster names may abut, treat that as the noise floor for ranking rather than
+// as evidence one candidate matched better.
 //
 // ScoreTarget reads l and cs and allocates everything else per call, so a
 // roster's worth of candidates may be scored against one lattice concurrently.
@@ -145,9 +169,12 @@ func extendedStates(classes []int, wildFlanks bool) []int {
 // rolling rows give O(len(ext)) space and O(T*len(ext)) time — a candidate is
 // scored against a whole line for the cost of a couple of thousand adds.
 //
-// len(ext) >= 3 always (the caller rejects an empty target, so there is at
-// least one character and its two surrounding blanks), which is why the start
-// and end state windows below need no bounds guard.
+// The start and end state windows below need no bounds guard. Without flanks
+// they touch at most states 0..1 and S-2..S-1, and S = 2L+1 >= 3 because the
+// caller rejects an empty target, so there is always at least one character
+// and its two surrounding blanks. The three-state windows only ever apply when
+// the flanks are present, and those add 2 to S — reaching S >= 5, which is
+// what makes prev[2] and prev[S-3] safe.
 func ctcForward(l Lattice, ext []int) float64 {
 	S := len(ext)
 	prev := make([]float64, S)
@@ -220,6 +247,13 @@ func ctcForward(l Lattice, ext []int) float64 {
 // head separates character spikes with blank-dominated frames — and it never
 // over-credits a candidate whose neighbouring text happens to end in the
 // candidate's own first character.
+//
+// This applies to transitions only, so it is silently exempted at the two ends
+// of the lattice: ctcForward's start and end state sets legalize the first
+// character at frame 0 and the last at frame T-1, which is the same W->c1 and
+// cL->W move forbidden here. Deliberate — there is no surrounding text at the
+// line's own edge — but it makes the flank cost positional, which ScoreTarget's
+// doc comment spells out for callers that rank on it.
 func canSkip(ext []int, s int) bool {
 	if ext[s] == blankClass || ext[s] == wildState || ext[s-2] == wildState {
 		return false
